@@ -1,0 +1,85 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <!-- Include the CesiumJS JavaScript and CSS files -->
+    <script src="https://cesium.com/downloads/cesiumjs/releases/1.138/Build/Cesium/Cesium.js"></script>
+    <link
+      href="https://cesium.com/downloads/cesiumjs/releases/1.138/Build/Cesium/Widgets/widgets.css"
+      rel="stylesheet"
+    />
+    <style>
+      /* Set the container to fill the entire page */
+      html,
+      body,
+      #cesiumContainer {
+        width: 100%;
+        height: 100%;
+        margin: 0;
+        padding: 0;
+        overflow: hidden;
+      }
+    </style>
+  </head>
+  <body>
+    <div id="cesiumContainer"></div>
+    <script type="module">
+      // Your access token can be found at: https://ion.cesium.com/tokens.
+      // This is the default access token from your ion account
+
+      Cesium.Ion.defaultAccessToken =
+        "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJqdGkiOiI4M2ZhYzM4My1lN2NhLTRjNTktODY1OC1jZDdmOTU3Y2ZjMGEiLCJpZCI6MTMwNTAsInNjb3BlcyI6WyJhc3IiLCJnYyJdLCJpYXQiOjE1NjI0NzA5NzB9.rRTs6chsWJdo9KNYe5VjJj2fUzMHeniIJvFQOd0aLJU";
+
+      // Initialize the Cesium Viewer in the HTML element with the `cesiumContainer` ID.
+      const viewer = new Cesium.Viewer("cesiumContainer", {
+        terrain: Cesium.Terrain.fromWorldTerrain(),
+      });
+
+      viewer.scene.globe.depthTestAgainstTerrain = true;
+
+      const scene = viewer.scene;
+
+      // 贴地表的大量矩形实例，使用 PerInstanceColorAppearance 来展示不同颜色
+      const instances = [];
+
+      for (let lon = -180; lon < 180; lon += 5) {
+        for (let lat = 0; lat < 90; lat += 5) {
+          instances.push(
+            new Cesium.GeometryInstance({
+              geometry: new Cesium.RectangleGeometry({
+                rectangle: Cesium.Rectangle.fromDegrees(lon, lat, lon + 5, lat + 5),
+                vertexFormat: Cesium.PerInstanceColorAppearance.VERTEX_FORMAT,
+              }),
+              id: `rect-${lon}-${lat}`,
+              attributes: {
+                color: Cesium.ColorGeometryInstanceAttribute.fromColor(
+                  Cesium.Color.fromRandom({ alpha: 0.5 })
+                ),
+              },
+            })
+          );
+        }
+      }
+
+      
+      scene.primitives.add(
+        new Cesium.GroundPrimitive({
+          geometryInstances: instances,
+          appearance: new Cesium.PerInstanceColorAppearance({
+            translucent: true,
+            closed: true,
+          })
+        })
+      );
+
+      // 点击事件，输出被点击对象的 ID
+      const handler = new Cesium.ScreenSpaceEventHandler(scene.canvas);
+      handler.setInputAction((movement) => {
+        const pickedObject = scene.pick(movement.position);
+        if (pickedObject && pickedObject.id) {
+          console.log("Picked object ID:", pickedObject.id);
+        }
+      }, Cesium.ScreenSpaceEventType.LEFT_CLICK);
+    </script>
+  </body>
+</html>
