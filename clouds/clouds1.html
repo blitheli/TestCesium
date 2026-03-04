@@ -1,0 +1,284 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <!-- Include the CesiumJS JavaScript and CSS files -->
+    <script src="https://cesium.com/downloads/cesiumjs/releases/1.138/Build/Cesium/Cesium.js"></script>
+    <link
+      href="https://cesium.com/downloads/cesiumjs/releases/1.138/Build/Cesium/Widgets/widgets.css"
+      rel="stylesheet"
+    />
+    <style>
+      /* Set the container to fill the entire page */
+      html,
+      body,
+      #cesiumContainer {
+        width: 100%;
+        height: 100%;
+        margin: 0;
+        padding: 0;
+        overflow: hidden;
+      }
+
+      #controls {
+        position: absolute;
+        top: 12px;
+        left: 12px;
+        z-index: 10;
+        background: rgba(24, 24, 30, 0.72);
+        color: #ffffff;
+        padding: 10px 12px;
+        border-radius: 8px;
+        font-family: sans-serif;
+        font-size: 13px;
+        min-width: 260px;
+        backdrop-filter: blur(4px);
+      }
+
+      #controls .row {
+        margin-bottom: 8px;
+        display: flex;
+        align-items: center;
+        gap: 8px;
+      }
+
+      #controls .row:last-child {
+        margin-bottom: 0;
+      }
+
+      #controls label {
+        width: 110px;
+        flex-shrink: 0;
+      }
+
+      #controls input[type="range"] {
+        flex: 1;
+      }
+
+      #controls .value {
+        width: 70px;
+        text-align: right;
+        color: #d2d9ff;
+        font-variant-numeric: tabular-nums;
+      }
+    </style>
+  </head>
+  <body>
+    <div id="cesiumContainer"></div>
+    <div id="controls">
+      <div class="row">
+        <label for="cloudOpacity">云层透明度</label>
+        <input
+          id="cloudOpacity"
+          type="range"
+          min="0.1"
+          max="1"
+          step="0.01"
+          value="0.62"
+        />
+        <span class="value" id="cloudOpacityValue">0.62</span>
+      </div>
+      <div class="row">
+        <label for="cloudSpeed">自转速度(°/s)</label>
+        <input
+          id="cloudSpeed"
+          type="range"
+          min="0"
+          max="2"
+          step="0.01"
+          value="0.35"
+        />
+        <span class="value" id="cloudSpeedValue">0.35</span>
+      </div>
+      <div class="row">
+        <label for="cloudHeight">云层高度(m)</label>
+        <input
+          id="cloudHeight"
+          type="range"
+          min="1000"
+          max="50000"
+          step="500"
+          value="15000"
+        />
+        <span class="value" id="cloudHeightValue">15000</span>
+      </div>
+      <div class="row">
+        <label for="browserResolution">浏览器分辨率</label>
+        <input id="browserResolution" type="checkbox" checked />
+        <span class="value" id="browserResolutionValue">开启</span>
+      </div>
+    </div>
+    <script type="module">
+      // Your access token can be found at: https://ion.cesium.com/tokens.
+      // This is the default access token from your ion account
+
+      Cesium.Ion.defaultAccessToken =
+        "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJqdGkiOiI4M2ZhYzM4My1lN2NhLTRjNTktODY1OC1jZDdmOTU3Y2ZjMGEiLCJpZCI6MTMwNTAsInNjb3BlcyI6WyJhc3IiLCJnYyJdLCJpYXQiOjE1NjI0NzA5NzB9.rRTs6chsWJdo9KNYe5VjJj2fUzMHeniIJvFQOd0aLJU";
+
+      // Initialize the Cesium Viewer in the HTML element with the `cesiumContainer` ID.
+      const viewer = new Cesium.Viewer("cesiumContainer", {
+        terrain: Cesium.Terrain.fromWorldTerrain(),
+      });
+
+      // 配置高级光照与阴影
+      viewer.scene.globe.enableLighting = true;
+
+      // 配置太阳光照
+      viewer.scene.light = new Cesium.SunLight({
+        intensity: 2.0,
+        castShadows: true,
+      });
+
+      const cloudOpacityInput = document.getElementById("cloudOpacity");
+      const cloudSpeedInput = document.getElementById("cloudSpeed");
+      const cloudHeightInput = document.getElementById("cloudHeight");
+      const browserResolutionInput =
+        document.getElementById("browserResolution");
+      const cloudOpacityValue = document.getElementById("cloudOpacityValue");
+      const cloudSpeedValue = document.getElementById("cloudSpeedValue");
+      const cloudHeightValue = document.getElementById("cloudHeightValue");
+      const browserResolutionValue = document.getElementById(
+        "browserResolutionValue",
+      );
+
+      viewer.scene.globe.enableLighting = true;
+      viewer.useBrowserRecommendedResolution = true;
+
+      const earthRadius = 6378137.0;
+      const baseCloudHeight = 15000.0;
+      let cloudHeight = baseCloudHeight;
+      let cloudSpeed = Cesium.Math.toRadians(0.35);
+      let cloudOpacity = 0.62;
+
+      const baseCloudRadius = earthRadius + baseCloudHeight;
+      const cloudRadii = new Cesium.Cartesian3(
+        baseCloudRadius,
+        baseCloudRadius,
+        baseCloudRadius,
+      );
+
+      const cloudMaterial = new Cesium.Material({
+        fabric: {
+          type: "CloudLayer",
+          uniforms: {
+            image: "./fair_clouds_4k.png",
+            globalOpacity: cloudOpacity,
+            alphaLow: 0.25,
+            alphaHigh: 0.8,
+            repeat: new Cesium.Cartesian2(1.0, 1.0),
+          },
+          source: `
+          czm_material czm_getMaterial(czm_materialInput materialInput)
+          {
+            czm_material material = czm_getDefaultMaterial(materialInput);
+            vec2 uv = fract(repeat * materialInput.st);
+            vec4 tex = texture(image, uv);
+
+            float luminance = dot(tex.rgb, vec3(0.299, 0.587, 0.114));
+            float derivedAlpha = smoothstep(alphaLow, alphaHigh, luminance);
+            float textureAlpha = tex.a;
+            float useTextureAlpha = step(textureAlpha, 0.99);
+            float finalAlpha = mix(derivedAlpha, textureAlpha, useTextureAlpha) * globalOpacity;
+
+            material.diffuse = tex.rgb;
+            material.alpha = clamp(finalAlpha, 0.0, 1.0);
+            return material;
+          }
+        `,
+        },
+      });
+
+      const cloudPrimitive = viewer.scene.primitives.add(
+        new Cesium.Primitive({
+          geometryInstances: new Cesium.GeometryInstance({
+            geometry: new Cesium.EllipsoidGeometry({
+              radii: cloudRadii,
+              stackPartitions: 64,
+              slicePartitions: 64,
+              vertexFormat:
+                Cesium.MaterialAppearance.MaterialSupport.TEXTURED.vertexFormat,
+            }),
+          }),
+          appearance: new Cesium.MaterialAppearance({
+            material: cloudMaterial,
+            translucent: true,
+            faceForward: true,
+            closed: true,
+            renderState: {
+              depthTest: {
+                enabled: true,
+              },
+              depthMask: false,
+              blending: Cesium.BlendingState.ALPHA_BLEND,
+            },
+          }),
+          asynchronous: false,
+        }),
+      );
+
+      function updateCloudModelMatrix(cloudAngle) {
+        const cloudRadius = earthRadius + cloudHeight;
+        const scale = cloudRadius / baseCloudRadius;
+
+        const rotationMatrix = Cesium.Matrix3.fromRotationZ(cloudAngle);
+        const modelMatrix =
+          Cesium.Matrix4.fromRotationTranslation(rotationMatrix);
+        Cesium.Matrix4.multiplyByUniformScale(modelMatrix, scale, modelMatrix);
+        cloudPrimitive.modelMatrix = modelMatrix;
+      }
+
+      function updateCloudMaterial() {
+        cloudMaterial.uniforms.globalOpacity = cloudOpacity;
+      }
+
+      let cloudAngle = 0.0;
+      let lastTime;
+
+      viewer.scene.preRender.addEventListener((scene, time) => {
+        if (!lastTime) {
+          lastTime = time;
+          return;
+        }
+
+        const deltaSeconds = Cesium.JulianDate.secondsDifference(
+          time,
+          lastTime,
+        );
+        lastTime = time;
+
+        cloudAngle += cloudSpeed * deltaSeconds;
+        updateCloudModelMatrix(cloudAngle);
+      });
+
+      cloudOpacityInput.addEventListener("input", () => {
+        cloudOpacity = Number(cloudOpacityInput.value);
+        cloudOpacityValue.textContent = cloudOpacity.toFixed(2);
+        updateCloudMaterial();
+      });
+
+      cloudSpeedInput.addEventListener("input", () => {
+        const speedDeg = Number(cloudSpeedInput.value);
+        cloudSpeed = Cesium.Math.toRadians(speedDeg);
+        cloudSpeedValue.textContent = speedDeg.toFixed(2);
+      });
+
+      cloudHeightInput.addEventListener("input", () => {
+        cloudHeight = Number(cloudHeightInput.value);
+        cloudHeightValue.textContent = String(Math.round(cloudHeight));
+        updateCloudModelMatrix(cloudAngle);
+      });
+
+      browserResolutionInput.addEventListener("change", () => {
+        const enabled = browserResolutionInput.checked;
+        viewer.useBrowserRecommendedResolution = enabled;
+        browserResolutionValue.textContent = enabled ? "开启" : "关闭";
+        viewer.scene.requestRender();
+      });
+
+      updateCloudMaterial();
+      updateCloudModelMatrix(cloudAngle);
+
+      viewer.camera.flyHome(0);
+    </script>
+  </body>
+</html>
