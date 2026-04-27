@@ -50,11 +50,11 @@ http://localhost:8000/RocketFlame/rocketFlame.html
 
 1. 几何体: `Cesium.CylinderGeometry({ length, topRadius: 0.05, bottomRadius })`,
    收紧成锥状, 底面对喷口、尖端朝外。
-2. 材质: `new Cesium.Material({ fabric: { uniforms: { time, coreColor, midColor, tipColor }, source } })`。
-   shader 内用 3D fbm 噪声 + 沿轴向滚动的 `time` uniform 调制 `m.alpha` 与 `m.emission`,
-   颜色按强度由内到外取 `core (白黄) -> mid (橙) -> tip (深红)`。
-   `czm_materialInput.st` 在 cylinder 侧面上 `s` 是周向 (0..1 闭环)、`t` 是轴向 (0=喷口, 1=尖端),
-   shader 中通过 `(cos(s*2π), sin(s*2π))` 把 s 映射到 2D 方向, 避免 0/1 接缝。
+2. 材质: `new Cesium.Material({ fabric: { uniforms: { time, coreColor, flameColor, smokeColor, farSmokeColor, intensity, turbulenceAmount, ringCount, ringContrast }, source } })`。
+   shader 参考 `reference.tsx` 的 2D fbm 尾焰逻辑, 用沿轴向滚动的湍流生成高温核心, 橙色火焰和远端烟羽。
+   同时加入静态马赫环: `ringCount` 控制亮盘数量, `ringContrast` 控制亮盘强度。
+   颜色由远端烟雾过渡到橙色火焰, 再到白黄色核心。
+   `czm_materialInput.st` 在 cylinder 侧面上 `s` 是周向 (映射为 `lateral = s - 0.5`), `t` 是轴向 (0=喷口, 1=尖端)。
 3. 外观: `MaterialAppearance({ material, translucent: true, closed: false })`。
 4. 位姿同步: 在 `scene.preUpdate` 内读取 `rocket.position.getValue(time)` /
    `rocket.orientation.getValue(time)`, 用 `Matrix4.fromRotationTranslation` 拼出
