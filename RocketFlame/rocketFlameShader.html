@@ -1,0 +1,414 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Cesium Rocket Flame Shader</title>
+    <script src="https://cesium.com/downloads/cesiumjs/releases/1.138/Build/Cesium/Cesium.js"></script>
+    <link
+      href="https://cesium.com/downloads/cesiumjs/releases/1.138/Build/Cesium/Widgets/widgets.css"
+      rel="stylesheet"
+    />
+    <style>
+      html,
+      body,
+      #cesiumContainer {
+        width: 100%;
+        height: 100%;
+        margin: 0;
+        padding: 0;
+        overflow: hidden;
+      }
+
+      body {
+        font-family:
+          "Microsoft YaHei",
+          "PingFang SC",
+          "Noto Sans CJK SC",
+          sans-serif;
+      }
+
+      .panel {
+        position: absolute;
+        top: 16px;
+        left: 16px;
+        z-index: 10;
+        max-width: 380px;
+        padding: 14px 16px;
+        border: 1px solid rgba(255, 255, 255, 0.18);
+        border-radius: 12px;
+        color: #ffffff;
+        background: rgba(15, 22, 32, 0.78);
+        box-shadow: 0 12px 36px rgba(0, 0, 0, 0.28);
+        backdrop-filter: blur(8px);
+      }
+
+      .panel h1 {
+        margin: 0 0 8px;
+        font-size: 17px;
+      }
+
+      .panel p {
+        margin: 0;
+        color: rgba(255, 255, 255, 0.78);
+        font-size: 13px;
+        line-height: 1.6;
+      }
+
+      .panel .controls {
+        margin-top: 10px;
+        display: grid;
+        grid-template-columns: 1fr auto;
+        gap: 6px 10px;
+        align-items: center;
+        font-size: 12px;
+      }
+
+      .panel .controls label {
+        color: rgba(255, 255, 255, 0.85);
+      }
+
+      .panel .controls input[type="range"] {
+        width: 100%;
+      }
+
+      .panel .controls .value {
+        color: #7fffd4;
+        font-family: Consolas, "Courier New", monospace;
+        min-width: 48px;
+        text-align: right;
+      }
+
+      .status {
+        margin-top: 10px;
+        color: #7fffd4;
+        font-family: Consolas, "Courier New", monospace;
+        font-size: 12px;
+      }
+
+      .status.error {
+        color: #ff9a9a;
+      }
+    </style>
+  </head>
+  <body>
+    <div id="cesiumContainer"></div>
+    <aside class="panel" aria-live="polite">
+      <h1>Rocket 尾焰着色器</h1>
+      <p>
+        在火箭尾部挂一段
+        <code>CylinderGeometry</code> Primitive,
+        通过自定义 GLSL 材质 (fbm 噪声 + time uniform) 生成动态发动机尾焰,
+        每帧根据 CZML 给出的位置/姿态更新 <code>modelMatrix</code>。
+      </p>
+
+      <div class="controls">
+        <label for="lengthRange">尾焰长度</label>
+        <input id="lengthRange" type="range" min="2" max="60" step="0.5" value="22" />
+        <span class="value" id="lengthValue">22.0 m</span>
+
+        <label for="radiusRange">尾焰半径</label>
+        <input id="radiusRange" type="range" min="0.2" max="8" step="0.1" value="2.5" />
+        <span class="value" id="radiusValue">2.5 m</span>
+
+        <label for="offsetRange">尾部偏移</label>
+        <input id="offsetRange" type="range" min="-10" max="50" step="0.1" value="4" />
+        <span class="value" id="offsetValue">4.0 m</span>
+
+        <label for="axisSelect">尾喷方向</label>
+        <select id="axisSelect">
+          <option value="-Z" selected>-Z (默认: 火箭头沿本体 +Z)</option>
+          <option value="+Z">+Z (火箭头沿本体 -Z)</option>
+          <option value="-X">-X (火箭头沿本体 +X)</option>
+          <option value="+X">+X (火箭头沿本体 -X)</option>
+          <option value="-Y">-Y (火箭头沿本体 +Y)</option>
+          <option value="+Y">+Y (火箭头沿本体 -Y)</option>
+        </select>
+        <span class="value" id="axisValue">-Z</span>
+      </div>
+
+      <div id="status" class="status">正在加载 rocket.czml...</div>
+    </aside>
+
+    <script type="module">
+      Cesium.Ion.defaultAccessToken =
+        "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJqdGkiOiI4M2ZhYzM4My1lN2NhLTRjNTktODY1OC1jZDdmOTU3Y2ZjMGEiLCJpZCI6MTMwNTAsInNjb3BlcyI6WyJhc3IiLCJnYyJdLCJpYXQiOjE1NjI0NzA5NzB9.rRTs6chsWJdo9KNYe5VjJj2fUzMHeniIJvFQOd0aLJU";
+
+      const status = document.getElementById("status");
+      const viewer = new Cesium.Viewer("cesiumContainer", {
+        terrain: Cesium.Terrain.fromWorldTerrain(),
+        animation: true,
+        timeline: true,
+        shouldAnimate: true,
+      });
+
+      viewer.scene.globe.depthTestAgainstTerrain = true;
+      viewer.scene.globe.enableLighting = true;
+
+      const flameState = {
+        length: 22.0,
+        radius: 2.5,
+        tailOffset: 4.0,
+        axis: "-Z",
+      };
+
+      // CylinderGeometry 的 st 在侧面上: s 沿周向 (0..1 闭环), t 沿轴向 (0 喷口端, 1 尖端)
+      // 没有真正的径向距离, 我们用 (轴向衰减 + 沿周向无缝噪声) 调制 alpha 与 emission。
+      const flameShaderSource = `
+        uniform float time;
+        uniform vec4 coreColor;
+        uniform vec4 midColor;
+        uniform vec4 tipColor;
+
+        float hash(vec3 p) {
+          return fract(sin(dot(p, vec3(127.1, 311.7, 74.7))) * 43758.5453);
+        }
+
+        float vnoise3(vec3 p) {
+          vec3 i = floor(p);
+          vec3 f = fract(p);
+          vec3 u = f * f * (3.0 - 2.0 * f);
+          float n000 = hash(i + vec3(0.0, 0.0, 0.0));
+          float n100 = hash(i + vec3(1.0, 0.0, 0.0));
+          float n010 = hash(i + vec3(0.0, 1.0, 0.0));
+          float n110 = hash(i + vec3(1.0, 1.0, 0.0));
+          float n001 = hash(i + vec3(0.0, 0.0, 1.0));
+          float n101 = hash(i + vec3(1.0, 0.0, 1.0));
+          float n011 = hash(i + vec3(0.0, 1.0, 1.0));
+          float n111 = hash(i + vec3(1.0, 1.0, 1.0));
+          float nx00 = mix(n000, n100, u.x);
+          float nx10 = mix(n010, n110, u.x);
+          float nx01 = mix(n001, n101, u.x);
+          float nx11 = mix(n011, n111, u.x);
+          float nxy0 = mix(nx00, nx10, u.y);
+          float nxy1 = mix(nx01, nx11, u.y);
+          return mix(nxy0, nxy1, u.z);
+        }
+
+        float fbm3(vec3 p) {
+          float v = 0.0;
+          float a = 0.55;
+          for (int k = 0; k < 5; k++) {
+            v += a * vnoise3(p);
+            p *= 2.05;
+            a *= 0.5;
+          }
+          return v;
+        }
+
+        czm_material czm_getMaterial(czm_materialInput materialInput) {
+          czm_material m = czm_getDefaultMaterial(materialInput);
+
+          float axial = clamp(materialInput.st.t, 0.0, 1.0);
+          float ang = materialInput.st.s * 6.2831853;
+          // 用 (cos, sin) 让 s 在 0/1 处无缝接合, 第三维加入轴向 + 时间扰动,
+          // 整体形成沿轴向滚动的 3D fbm 体噪声。
+          vec3 q = vec3(cos(ang) * 1.6, sin(ang) * 1.6, axial * 4.0 - time * 2.5);
+          float n = fbm3(q);
+          float n2 = fbm3(q * 2.1 + vec3(0.0, 0.0, time * 0.6));
+          float turbulence = mix(n, n2, 0.45);
+
+          // 轴向衰减: 喷口端最强, 尖端 alpha 趋 0; 加入噪声让外形不规则。
+          float baseFalloff = pow(1.0 - axial, 1.4);
+          float intensity = clamp(baseFalloff * (0.55 + 0.85 * turbulence) - 0.08, 0.0, 1.0);
+
+          vec3 col = mix(tipColor.rgb, midColor.rgb, smoothstep(0.05, 0.55, intensity));
+          col = mix(col, coreColor.rgb, smoothstep(0.55, 0.95, intensity));
+
+          m.diffuse = vec3(0.0);
+          m.emission = col * (0.5 + 1.6 * intensity);
+          m.alpha = intensity;
+          return m;
+        }
+      `;
+
+      const flameMaterial = new Cesium.Material({
+        translucent: true,
+        fabric: {
+          type: "RocketFlame",
+          uniforms: {
+            time: 0.0,
+            coreColor: new Cesium.Color(1.0, 1.0, 0.9, 1.0),
+            midColor: new Cesium.Color(1.0, 0.55, 0.1, 1.0),
+            tipColor: new Cesium.Color(0.7, 0.05, 0.0, 1.0),
+          },
+          source: flameShaderSource,
+        },
+      });
+
+      const flameAppearance = new Cesium.MaterialAppearance({
+        material: flameMaterial,
+        translucent: true,
+        closed: false,
+      });
+
+      let flamePrimitive = null;
+
+      function buildFlamePrimitive() {
+        if (flamePrimitive) {
+          viewer.scene.primitives.remove(flamePrimitive);
+          flamePrimitive = null;
+        }
+        flamePrimitive = new Cesium.Primitive({
+          geometryInstances: new Cesium.GeometryInstance({
+            geometry: new Cesium.CylinderGeometry({
+              length: flameState.length,
+              topRadius: 0.05,
+              bottomRadius: flameState.radius,
+              vertexFormat: Cesium.MaterialAppearance.MaterialSupport.BASIC.vertexFormat,
+            }),
+          }),
+          appearance: flameAppearance,
+          asynchronous: false,
+          allowPicking: false,
+          releaseGeometryInstances: false,
+          modelMatrix: new Cesium.Matrix4(),
+        });
+        viewer.scene.primitives.add(flamePrimitive);
+      }
+
+      function buildLocalFlameMatrix() {
+        const halfLen = flameState.length / 2;
+        const baseShift = flameState.tailOffset + halfLen;
+
+        let rotationMatrix3;
+        let translation;
+
+        switch (flameState.axis) {
+          case "+X":
+            rotationMatrix3 = Cesium.Matrix3.fromRotationY(Cesium.Math.toRadians(90));
+            translation = new Cesium.Cartesian3(baseShift, 0, 0);
+            break;
+          case "-Y":
+            rotationMatrix3 = Cesium.Matrix3.fromRotationX(Cesium.Math.toRadians(90));
+            translation = new Cesium.Cartesian3(0, -baseShift, 0);
+            break;
+          case "+Y":
+            rotationMatrix3 = Cesium.Matrix3.fromRotationX(Cesium.Math.toRadians(-90));
+            translation = new Cesium.Cartesian3(0, baseShift, 0);
+            break;
+          case "-Z":
+            rotationMatrix3 = Cesium.Matrix3.fromRotationX(Cesium.Math.toRadians(180));
+            translation = new Cesium.Cartesian3(0, 0, -baseShift);
+            break;
+          case "+Z":
+            rotationMatrix3 = Cesium.Matrix3.clone(Cesium.Matrix3.IDENTITY);
+            translation = new Cesium.Cartesian3(0, 0, baseShift);
+            break;
+          case "-X":
+          default:
+            rotationMatrix3 = Cesium.Matrix3.fromRotationY(Cesium.Math.toRadians(-90));
+            translation = new Cesium.Cartesian3(-baseShift, 0, 0);
+            break;
+        }
+
+        const rotMat4 = Cesium.Matrix4.fromRotationTranslation(
+          rotationMatrix3,
+          Cesium.Cartesian3.ZERO,
+        );
+        const transMat4 = Cesium.Matrix4.fromTranslation(translation);
+        return Cesium.Matrix4.multiply(transMat4, rotMat4, new Cesium.Matrix4());
+      }
+
+      let localFlameMatrix = buildLocalFlameMatrix();
+
+      buildFlamePrimitive();
+
+      const lengthRange = document.getElementById("lengthRange");
+      const radiusRange = document.getElementById("radiusRange");
+      const offsetRange = document.getElementById("offsetRange");
+      const axisSelect = document.getElementById("axisSelect");
+      const lengthValue = document.getElementById("lengthValue");
+      const radiusValue = document.getElementById("radiusValue");
+      const offsetValue = document.getElementById("offsetValue");
+      const axisValue = document.getElementById("axisValue");
+
+      lengthRange.addEventListener("input", () => {
+        flameState.length = Number(lengthRange.value);
+        lengthValue.textContent = flameState.length.toFixed(1) + " m";
+        localFlameMatrix = buildLocalFlameMatrix();
+        buildFlamePrimitive();
+      });
+      radiusRange.addEventListener("input", () => {
+        flameState.radius = Number(radiusRange.value);
+        radiusValue.textContent = flameState.radius.toFixed(1) + " m";
+        buildFlamePrimitive();
+      });
+      offsetRange.addEventListener("input", () => {
+        flameState.tailOffset = Number(offsetRange.value);
+        offsetValue.textContent = flameState.tailOffset.toFixed(1) + " m";
+        localFlameMatrix = buildLocalFlameMatrix();
+      });
+      axisSelect.addEventListener("change", () => {
+        flameState.axis = axisSelect.value;
+        axisValue.textContent = flameState.axis;
+        localFlameMatrix = buildLocalFlameMatrix();
+      });
+
+      let rocket = null;
+      const posScratch = new Cesium.Cartesian3();
+      const quatScratch = new Cesium.Quaternion();
+      const rotScratch = new Cesium.Matrix3();
+      const worldScratch = new Cesium.Matrix4();
+
+      viewer.scene.preUpdate.addEventListener((scene, time) => {
+        if (!rocket || !flamePrimitive) return;
+
+        const p = rocket.position?.getValue(time, posScratch);
+        const q = rocket.orientation?.getValue(time, quatScratch);
+        if (!p || !q) {
+          flamePrimitive.show = false;
+          return;
+        }
+        flamePrimitive.show = true;
+
+        Cesium.Matrix3.fromQuaternion(q, rotScratch);
+        Cesium.Matrix4.fromRotationTranslation(rotScratch, p, worldScratch);
+        Cesium.Matrix4.multiply(
+          worldScratch,
+          localFlameMatrix,
+          flamePrimitive.modelMatrix,
+        );
+
+        flameMaterial.uniforms.time = Cesium.JulianDate.secondsDifference(
+          time,
+          viewer.clock.startTime,
+        );
+      });
+
+      try {
+        const dataSource = await Cesium.CzmlDataSource.load("./rocket.czml");
+        await viewer.dataSources.add(dataSource);
+
+        viewer.clockTrackedDataSource = dataSource;
+
+        if (dataSource.clock) {
+          viewer.timeline.zoomTo(dataSource.clock.startTime, dataSource.clock.stopTime);
+        }
+
+        rocket = dataSource.entities.getById("LaunchVehicle/LaunchVehicle1");
+        if (rocket) {
+          viewer.trackedEntity = rocket;
+        }
+
+        await viewer.zoomTo(dataSource);
+        status.textContent = "rocket.czml 加载完成, 尾焰着色器已挂载";
+
+        window.rocketFlame = {
+          viewer,
+          flameMaterial,
+          flameState,
+          getPrimitive: () => flamePrimitive,
+          rebuild: buildFlamePrimitive,
+          rebuildMatrix: () => {
+            localFlameMatrix = buildLocalFlameMatrix();
+          },
+        };
+      } catch (error) {
+        console.error("Failed to load rocket.czml", error);
+        status.textContent = "rocket.czml 加载失败, 请确认通过静态服务器访问项目根目录。";
+        status.classList.add("error");
+      }
+    </script>
+  </body>
+</html>
