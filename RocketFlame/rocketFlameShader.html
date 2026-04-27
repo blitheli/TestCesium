@@ -96,8 +96,8 @@
     <aside class="panel" aria-live="polite">
       <h1>Rocket 尾焰着色器</h1>
       <p>
-        在火箭尾部挂一段
-        <code>CylinderGeometry</code> Primitive,
+        在火箭尾部挂一组
+        <code>cross-plane</code> Primitive,
         通过自定义 GLSL 材质 (fbm 噪声 + time uniform) 生成动态发动机尾焰,
         每帧根据 CZML 给出的位置/姿态更新 <code>modelMatrix</code>。
       </p>
@@ -112,8 +112,8 @@
         <span class="value" id="radiusValue">2.5 m</span>
 
         <label for="offsetRange">尾部偏移</label>
-        <input id="offsetRange" type="range" min="-10" max="50" step="0.1" value="4" />
-        <span class="value" id="offsetValue">4.0 m</span>
+        <input id="offsetRange" type="range" min="-10" max="60" step="0.1" value="20.5" />
+        <span class="value" id="offsetValue">20.5 m</span>
 
         <label for="axisSelect">尾喷方向</label>
         <select id="axisSelect">
@@ -148,12 +148,12 @@
       const flameState = {
         length: 22.0,
         radius: 2.5,
-        tailOffset: 4.0,
+        tailOffset: 20.5,
         axis: "-Z",
       };
 
       // 参考 reference.tsx 的尾焰逻辑: 轴向火焰, 烟羽扩散, 静态马赫环。
-      // CylinderGeometry 的 st 在侧面上: s 沿周向, t 沿轴向 (0 喷口端, 1 尖端)。
+      // 用十字双平面复刻 PlaneGeometry 的 st: s 横向, t 轴向 (0 喷口端, 1 尖端)。
       const flameShaderSource = `
         uniform float time;
         uniform vec4 coreColor;
@@ -243,8 +243,12 @@
           alpha *= farFade * intensity;
           alpha = clamp(alpha, 0.0, 1.0);
 
+          if (alpha < 0.01) {
+            discard;
+          }
+
           m.diffuse = vec3(0.0);
-          m.emission = col * (0.45 + 1.9 * alpha + ringBoost * 0.6);
+          m.emission = col * (0.85 + 2.8 * alpha + ringBoost * 0.9);
           m.alpha = alpha;
           return m;
         }
@@ -260,10 +264,10 @@
             flameColor: Cesium.Color.fromCssColorString("#ff6a22"),
             smokeColor: Cesium.Color.fromCssColorString("#dba090"),
             farSmokeColor: Cesium.Color.fromCssColorString("#9c8d86"),
-            intensity: 1.0,
+            intensity: 1.35,
             turbulenceAmount: 1.4,
             ringCount: 2.0,
-            ringContrast: 0.25,
+            ringContrast: 0.4,
           },
           source: flameShaderSource,
         },
@@ -271,11 +275,58 @@
 
       const flameAppearance = new Cesium.MaterialAppearance({
         material: flameMaterial,
+        materialSupport: Cesium.MaterialAppearance.MaterialSupport.TEXTURED,
         translucent: true,
         closed: false,
+        renderState: {
+          depthTest: {
+            enabled: false,
+          },
+          depthMask: false,
+          blending: Cesium.BlendingState.ADDITIVE_BLEND,
+          cull: {
+            enabled: false,
+          },
+        },
       });
 
       let flamePrimitive = null;
+
+      function createFlamePlaneInstances() {
+        const geometry = new Cesium.PlaneGeometry({
+          vertexFormat: Cesium.MaterialAppearance.MaterialSupport.TEXTURED.vertexFormat,
+        });
+        const scale = Cesium.Matrix4.fromScale(
+          new Cesium.Cartesian3(flameState.radius * 2.0, flameState.length, 1.0),
+        );
+        const alignLengthToZ = Cesium.Matrix4.fromRotationTranslation(
+          Cesium.Matrix3.fromRotationX(Cesium.Math.toRadians(90)),
+        );
+        const rotateCross = Cesium.Matrix4.fromRotationTranslation(
+          Cesium.Matrix3.fromRotationZ(Cesium.Math.toRadians(90)),
+        );
+        const firstPlaneMatrix = Cesium.Matrix4.multiply(
+          alignLengthToZ,
+          scale,
+          new Cesium.Matrix4(),
+        );
+        const secondPlaneMatrix = Cesium.Matrix4.multiply(
+          rotateCross,
+          firstPlaneMatrix,
+          new Cesium.Matrix4(),
+        );
+
+        return [
+          new Cesium.GeometryInstance({
+            geometry,
+            modelMatrix: firstPlaneMatrix,
+          }),
+          new Cesium.GeometryInstance({
+            geometry,
+            modelMatrix: secondPlaneMatrix,
+          }),
+        ];
+      }
 
       function buildFlamePrimitive() {
         if (flamePrimitive) {
@@ -283,14 +334,7 @@
           flamePrimitive = null;
         }
         flamePrimitive = new Cesium.Primitive({
-          geometryInstances: new Cesium.GeometryInstance({
-            geometry: new Cesium.CylinderGeometry({
-              length: flameState.length,
-              topRadius: 0.05,
-              bottomRadius: flameState.radius,
-              vertexFormat: Cesium.MaterialAppearance.MaterialSupport.BASIC.vertexFormat,
-            }),
-          }),
+          geometryInstances: createFlamePlaneInstances(),
           appearance: flameAppearance,
           asynchronous: false,
           allowPicking: false,
