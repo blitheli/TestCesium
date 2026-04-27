@@ -70,11 +70,10 @@ http://localhost:8000/RocketFlame/rocketFlame.html
 
 ### 本体坐标系约定
 
-`launchvehicle.glb` 经过 Cesium 加载后的本体坐标系: **+Z 是火箭头方向, -Z 是发动机喷口方向**(已通过把 quaternion 旋转出的本体 +Z 与发射点 ENU 的 up 方向比较验证)。
-所以默认 `axis = "-Z"`, 局部矩阵用 `Matrix3.fromRotationX(180°)` 把 cross-plane 默认的 +Z 翻到 -Z,
-再沿 -Z 平移 `(tailOffset + length / 2)`。
-`launchvehicle.glb` 的 accessor bounds 显示模型长度约 40.8m, 尾部在局部 `-Z ~= -20.4m`,
-因此默认 `tailOffset = 20.5m`, 让尾焰喷口端位于模型尾部外侧。
+`launchvehicle.glb` 经过 CZML 姿态加载后, 画面验证到发动机喷口方向对应本体 `-X`。
+所以默认 `axis = "-X"`, 局部矩阵用 `Matrix3.fromRotationY(-90°)` 把 cross-plane 默认的 +Z 转到 -X,
+再沿 -X 平移 `(tailOffset + length / 2)`。
+默认 `tailOffset = 20.5m`, 让尾焰喷口端位于模型尾部外侧。
 
 页面右上角的控制面板提供 `尾焰长度 / 尾焰半径 / 尾部偏移 / 尾喷方向` 4 个滑块/下拉菜单, 方便针对其它模型快速调试。
 

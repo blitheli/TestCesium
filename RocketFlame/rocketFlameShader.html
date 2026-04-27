@@ -117,14 +117,14 @@
 
         <label for="axisSelect">尾喷方向</label>
         <select id="axisSelect">
-          <option value="-Z" selected>-Z (默认: 火箭头沿本体 +Z)</option>
+          <option value="-Z">-Z (火箭头沿本体 +Z)</option>
           <option value="+Z">+Z (火箭头沿本体 -Z)</option>
-          <option value="-X">-X (火箭头沿本体 +X)</option>
+          <option value="-X" selected>-X (默认: launchvehicle.glb 尾喷方向)</option>
           <option value="+X">+X (火箭头沿本体 -X)</option>
           <option value="-Y">-Y (火箭头沿本体 +Y)</option>
           <option value="+Y">+Y (火箭头沿本体 -Y)</option>
         </select>
-        <span class="value" id="axisValue">-Z</span>
+        <span class="value" id="axisValue">-X</span>
       </div>
 
       <div id="status" class="status">正在加载 rocket.czml...</div>
@@ -149,7 +149,7 @@
         length: 22.0,
         radius: 2.5,
         tailOffset: 20.5,
-        axis: "-Z",
+        axis: "-X",
       };
 
       // 参考 reference.tsx 的尾焰逻辑: 轴向火焰, 烟羽扩散, 静态马赫环。
