@@ -1,0 +1,500 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Cesium Rocket Flame Shader</title>
+    <script src="https://cesium.com/downloads/cesiumjs/releases/1.138/Build/Cesium/Cesium.js"></script>
+    <link
+      href="https://cesium.com/downloads/cesiumjs/releases/1.138/Build/Cesium/Widgets/widgets.css"
+      rel="stylesheet"
+    />
+    <style>
+      html,
+      body,
+      #cesiumContainer {
+        width: 100%;
+        height: 100%;
+        margin: 0;
+        padding: 0;
+        overflow: hidden;
+      }
+
+      body {
+        font-family:
+          "Microsoft YaHei",
+          "PingFang SC",
+          "Noto Sans CJK SC",
+          sans-serif;
+      }
+
+      .panel {
+        position: absolute;
+        top: 16px;
+        left: 16px;
+        z-index: 10;
+        max-width: 380px;
+        padding: 14px 16px;
+        border: 1px solid rgba(255, 255, 255, 0.18);
+        border-radius: 12px;
+        color: #ffffff;
+        background: rgba(15, 22, 32, 0.78);
+        box-shadow: 0 12px 36px rgba(0, 0, 0, 0.28);
+        backdrop-filter: blur(8px);
+      }
+
+      .panel h1 {
+        margin: 0 0 8px;
+        font-size: 17px;
+      }
+
+      .panel p {
+        margin: 0;
+        color: rgba(255, 255, 255, 0.78);
+        font-size: 13px;
+        line-height: 1.6;
+      }
+
+      .panel .controls {
+        margin-top: 10px;
+        display: grid;
+        grid-template-columns: 1fr auto;
+        gap: 6px 10px;
+        align-items: center;
+        font-size: 12px;
+      }
+
+      .panel .controls label {
+        color: rgba(255, 255, 255, 0.85);
+      }
+
+      .panel .controls input[type="range"] {
+        width: 100%;
+      }
+
+      .panel .controls .value {
+        color: #7fffd4;
+        font-family: Consolas, "Courier New", monospace;
+        min-width: 48px;
+        text-align: right;
+      }
+
+      .status {
+        margin-top: 10px;
+        color: #7fffd4;
+        font-family: Consolas, "Courier New", monospace;
+        font-size: 12px;
+      }
+
+      .status.error {
+        color: #ff9a9a;
+      }
+    </style>
+  </head>
+  <body>
+    <div id="cesiumContainer"></div>
+    <aside class="panel" aria-live="polite">
+      <h1>Rocket 尾焰着色器</h1>
+      <p>
+        在火箭尾部挂一组
+        <code>cross-plane</code> Primitive,
+        通过自定义 GLSL 材质 (fbm 噪声 + time uniform) 生成动态发动机尾焰,
+        每帧根据 CZML 给出的位置/姿态更新 <code>modelMatrix</code>。
+      </p>
+
+      <div class="controls">
+        <label for="lengthRange">尾焰长度</label>
+        <input id="lengthRange" type="range" min="2" max="80" step="0.5" value="60" />
+        <span class="value" id="lengthValue">22.0 m</span>
+
+        <label for="radiusRange">尾焰半径</label>
+        <input id="radiusRange" type="range" min="0.2" max="8" step="0.1" value="5" />
+        <span class="value" id="radiusValue">2.5 m</span>
+
+        <label for="offsetRange">尾部偏移</label>
+        <input id="offsetRange" type="range" min="-10" max="60" step="0.1" value="31" />
+        <span class="value" id="offsetValue">20.5 m</span>
+
+        <label for="axisSelect">尾喷方向</label>
+        <select id="axisSelect">
+          <option value="-Z">-Z (火箭头沿本体 +Z)</option>
+          <option value="+Z">+Z (火箭头沿本体 -Z)</option>
+          <option value="-X" selected>-X (默认: launchvehicle.glb 尾喷方向)</option>
+          <option value="+X">+X (火箭头沿本体 -X)</option>
+          <option value="-Y">-Y (火箭头沿本体 +Y)</option>
+          <option value="+Y">+Y (火箭头沿本体 -Y)</option>
+        </select>
+        <span class="value" id="axisValue">-X</span>
+      </div>
+
+      <div id="status" class="status">正在加载 rocket.czml...</div>
+    </aside>
+
+    <script type="module">
+      Cesium.Ion.defaultAccessToken =
+        "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJqdGkiOiI4M2ZhYzM4My1lN2NhLTRjNTktODY1OC1jZDdmOTU3Y2ZjMGEiLCJpZCI6MTMwNTAsInNjb3BlcyI6WyJhc3IiLCJnYyJdLCJpYXQiOjE1NjI0NzA5NzB9.rRTs6chsWJdo9KNYe5VjJj2fUzMHeniIJvFQOd0aLJU";
+
+      const status = document.getElementById("status");
+      const viewer = new Cesium.Viewer("cesiumContainer", {
+        terrain: Cesium.Terrain.fromWorldTerrain(),
+        animation: true,
+        timeline: true,
+        shouldAnimate: true,
+      });
+
+      viewer.scene.globe.depthTestAgainstTerrain = true;
+      viewer.scene.globe.enableLighting = true;
+      viewer.useBrowserRecommendedResolution = false;
+
+      const flameState = {
+        length: 22.0,
+        radius: 2.5,
+        tailOffset: 20.5,
+        axis: "-X",
+      };
+
+      // 参考 reference.tsx 的尾焰逻辑: 轴向火焰, 烟羽扩散, 静态马赫环。
+      // 用十字双平面复刻 PlaneGeometry 的 st: s 横向, t 轴向 (0 喷口端, 1 尖端)。
+      const flameShaderSource = `
+        uniform float time;
+        uniform vec4 coreColor;
+        uniform vec4 flameColor;
+        uniform vec4 smokeColor;
+        uniform vec4 farSmokeColor;
+        uniform float intensity;
+        uniform float turbulenceAmount;
+        uniform float ringCount;
+        uniform float ringContrast;
+
+        float hash(vec2 p) {
+          return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453123);
+        }
+
+        float noise(vec2 p) {
+          vec2 i = floor(p);
+          vec2 f = fract(p);
+          vec2 u = f * f * (3.0 - 2.0 * f);
+          return mix(
+            mix(hash(i + vec2(0.0, 0.0)), hash(i + vec2(1.0, 0.0)), u.x),
+            mix(hash(i + vec2(0.0, 1.0)), hash(i + vec2(1.0, 1.0)), u.x),
+            u.y
+          );
+        }
+
+        float fbm(vec2 p) {
+          float value = 0.0;
+          float amplitude = 0.5;
+          for (int i = 0; i < 5; i++) {
+            value += amplitude * noise(p);
+            p *= 2.05;
+            amplitude *= 0.5;
+          }
+          return value;
+        }
+
+        float fadeOut(float edge0, float edge1, float x) {
+          return 1.0 - smoothstep(edge0, edge1, x);
+        }
+
+        czm_material czm_getMaterial(czm_materialInput materialInput) {
+          czm_material m = czm_getDefaultMaterial(materialInput);
+
+          float along = clamp(materialInput.st.t, 0.0, 1.0);
+          float lateral = materialInput.st.s - 0.5;
+
+          float spread = 0.38 + along * (0.50 + turbulenceAmount * 0.20);
+          float turb = fbm(vec2(lateral * 7.0, along * 4.0 - time * 5.5));
+          float turb2 = fbm(vec2(lateral * 3.0 + 17.3, along * 1.8 - time * 2.2));
+          float turb3 = fbm(vec2(lateral * 11.0 - 5.0, along * 7.0 - time * 3.5));
+
+          float wobble = (turb - 0.5) * 0.40 * turbulenceAmount * smoothstep(0.0, 0.55, along);
+          float dist = abs(lateral / spread + wobble) * 2.0;
+
+          float ringZone = clamp((along - 0.08) / 0.40, 0.0, 1.0);
+          float ringPhase = ringZone * ringCount * 6.2831853 + sin(lateral * 11.0 + 7.3) * 0.45;
+          float rings = smoothstep(0.72, 0.96, sin(ringPhase));
+          float ringMask = fadeOut(0.42, 0.55, along) * smoothstep(0.08, 0.16, along);
+          ringMask *= smoothstep(0.0, 0.5, ringCount);
+
+          float core = fadeOut(0.0, 0.55, dist) * fadeOut(0.0, 0.32, along);
+          float flame = fadeOut(0.05, 1.0, dist)
+            * fadeOut(0.02, 0.65, along)
+            * (1.0 + turb2 * 0.25 * turbulenceAmount);
+          float plumeDist = dist - turb3 * 0.45 * turbulenceAmount * smoothstep(0.20, 0.75, along);
+          float plume = fadeOut(0.05, 1.0, plumeDist)
+            * smoothstep(0.32, 0.55, along)
+            * fadeOut(0.72, 1.0, along)
+            * (0.55 + turb * 0.6 * turbulenceAmount);
+
+          float farFade = 1.0 - smoothstep(0.78, 1.0, along);
+          vec3 smokeAt = mix(smokeColor.rgb, farSmokeColor.rgb, smoothstep(0.30, 0.85, along));
+          vec3 col = smokeAt;
+          col = mix(col, flameColor.rgb, clamp(flame, 0.0, 1.0));
+          col = mix(col, coreColor.rgb, clamp(core, 0.0, 1.0));
+
+          float ringRadialMask = fadeOut(0.18, 0.62, dist);
+          float ringBoost = rings * ringMask * ringRadialMask * ringContrast;
+          col = mix(col, coreColor.rgb, ringBoost * 0.45);
+
+          float alpha = 0.0;
+          alpha = max(alpha, core * 1.50);
+          alpha = max(alpha, flame * 1.15);
+          alpha = max(alpha, plume * 0.22);
+          alpha *= 1.0 + ringBoost * 0.35;
+          alpha *= farFade * intensity;
+          alpha = clamp(alpha, 0.0, 1.0);
+
+          if (alpha < 0.01) {
+            discard;
+          }
+
+          m.diffuse = vec3(0.0);
+          m.emission = col * (0.85 + 2.8 * alpha + ringBoost * 0.9);
+          m.alpha = alpha;
+          return m;
+        }
+      `;
+
+      const flameMaterial = new Cesium.Material({
+        translucent: true,
+        fabric: {
+          type: "RocketFlame",
+          uniforms: {
+            time: 0.0,
+            coreColor: Cesium.Color.fromCssColorString("#ffe6a8"),
+            flameColor: Cesium.Color.fromCssColorString("#ff6a22"),
+            smokeColor: Cesium.Color.fromCssColorString("#dba090"),
+            farSmokeColor: Cesium.Color.fromCssColorString("#9c8d86"),
+            intensity: 1.35,
+            turbulenceAmount: 1.4,
+            ringCount: 2.0,
+            ringContrast: 0.4,
+          },
+          source: flameShaderSource,
+        },
+      });
+
+      const flameAppearance = new Cesium.MaterialAppearance({
+        material: flameMaterial,
+        materialSupport: Cesium.MaterialAppearance.MaterialSupport.TEXTURED,
+        translucent: true,
+        closed: false,
+        renderState: {
+          depthTest: {
+            enabled: false,
+          },
+          depthMask: false,
+          blending: Cesium.BlendingState.ADDITIVE_BLEND,
+          cull: {
+            enabled: false,
+          },
+        },
+      });
+
+      let flamePrimitive = null;
+
+      function createFlamePlaneInstances() {
+        const geometry = new Cesium.PlaneGeometry({
+          vertexFormat: Cesium.MaterialAppearance.MaterialSupport.TEXTURED.vertexFormat,
+        });
+        const scale = Cesium.Matrix4.fromScale(
+          new Cesium.Cartesian3(flameState.radius * 2.0, flameState.length, 1.0),
+        );
+        const alignLengthToZ = Cesium.Matrix4.fromRotationTranslation(
+          Cesium.Matrix3.fromRotationX(Cesium.Math.toRadians(90)),
+        );
+        const rotateCross = Cesium.Matrix4.fromRotationTranslation(
+          Cesium.Matrix3.fromRotationZ(Cesium.Math.toRadians(90)),
+        );
+        const firstPlaneMatrix = Cesium.Matrix4.multiply(
+          alignLengthToZ,
+          scale,
+          new Cesium.Matrix4(),
+        );
+        const secondPlaneMatrix = Cesium.Matrix4.multiply(
+          rotateCross,
+          firstPlaneMatrix,
+          new Cesium.Matrix4(),
+        );
+
+        return [
+          new Cesium.GeometryInstance({
+            geometry,
+            modelMatrix: firstPlaneMatrix,
+          }),
+          new Cesium.GeometryInstance({
+            geometry,
+            modelMatrix: secondPlaneMatrix,
+          }),
+        ];
+      }
+
+      function buildFlamePrimitive() {
+        if (flamePrimitive) {
+          viewer.scene.primitives.remove(flamePrimitive);
+          flamePrimitive = null;
+        }
+        flamePrimitive = new Cesium.Primitive({
+          geometryInstances: createFlamePlaneInstances(),
+          appearance: flameAppearance,
+          asynchronous: false,
+          allowPicking: false,
+          releaseGeometryInstances: false,
+          modelMatrix: new Cesium.Matrix4(),
+        });
+        viewer.scene.primitives.add(flamePrimitive);
+      }
+
+      function buildLocalFlameMatrix() {
+        const halfLen = flameState.length / 2;
+        const baseShift = flameState.tailOffset + halfLen;
+
+        let rotationMatrix3;
+        let translation;
+
+        switch (flameState.axis) {
+          case "+X":
+            rotationMatrix3 = Cesium.Matrix3.fromRotationY(Cesium.Math.toRadians(90));
+            translation = new Cesium.Cartesian3(baseShift, 0, 0);
+            break;
+          case "-Y":
+            rotationMatrix3 = Cesium.Matrix3.fromRotationX(Cesium.Math.toRadians(90));
+            translation = new Cesium.Cartesian3(0, -baseShift, 0);
+            break;
+          case "+Y":
+            rotationMatrix3 = Cesium.Matrix3.fromRotationX(Cesium.Math.toRadians(-90));
+            translation = new Cesium.Cartesian3(0, baseShift, 0);
+            break;
+          case "-Z":
+            rotationMatrix3 = Cesium.Matrix3.fromRotationX(Cesium.Math.toRadians(180));
+            translation = new Cesium.Cartesian3(0, 0, -baseShift);
+            break;
+          case "+Z":
+            rotationMatrix3 = Cesium.Matrix3.clone(Cesium.Matrix3.IDENTITY);
+            translation = new Cesium.Cartesian3(0, 0, baseShift);
+            break;
+          case "-X":
+          default:
+            rotationMatrix3 = Cesium.Matrix3.fromRotationY(Cesium.Math.toRadians(-90));
+            translation = new Cesium.Cartesian3(-baseShift, 0, 0);
+            break;
+        }
+
+        const rotMat4 = Cesium.Matrix4.fromRotationTranslation(
+          rotationMatrix3,
+          Cesium.Cartesian3.ZERO,
+        );
+        const transMat4 = Cesium.Matrix4.fromTranslation(translation);
+        return Cesium.Matrix4.multiply(transMat4, rotMat4, new Cesium.Matrix4());
+      }
+
+      let localFlameMatrix = buildLocalFlameMatrix();
+
+      buildFlamePrimitive();
+
+      const lengthRange = document.getElementById("lengthRange");
+      const radiusRange = document.getElementById("radiusRange");
+      const offsetRange = document.getElementById("offsetRange");
+      const axisSelect = document.getElementById("axisSelect");
+      const lengthValue = document.getElementById("lengthValue");
+      const radiusValue = document.getElementById("radiusValue");
+      const offsetValue = document.getElementById("offsetValue");
+      const axisValue = document.getElementById("axisValue");
+
+      lengthRange.addEventListener("input", () => {
+        flameState.length = Number(lengthRange.value);
+        lengthValue.textContent = flameState.length.toFixed(1) + " m";
+        localFlameMatrix = buildLocalFlameMatrix();
+        buildFlamePrimitive();
+      });
+      radiusRange.addEventListener("input", () => {
+        flameState.radius = Number(radiusRange.value);
+        radiusValue.textContent = flameState.radius.toFixed(1) + " m";
+        buildFlamePrimitive();
+      });
+      offsetRange.addEventListener("input", () => {
+        flameState.tailOffset = Number(offsetRange.value);
+        offsetValue.textContent = flameState.tailOffset.toFixed(1) + " m";
+        localFlameMatrix = buildLocalFlameMatrix();
+      });
+      axisSelect.addEventListener("change", () => {
+        flameState.axis = axisSelect.value;
+        axisValue.textContent = flameState.axis;
+        localFlameMatrix = buildLocalFlameMatrix();
+      });
+
+      let rocket = null;
+      let hasValidFlameTransform = false;
+      const posScratch = new Cesium.Cartesian3();
+      const quatScratch = new Cesium.Quaternion();
+      const rotScratch = new Cesium.Matrix3();
+      const worldScratch = new Cesium.Matrix4();
+
+      function updateFlameForTime(time) {
+        if (!rocket || !flamePrimitive) return false;
+
+        const p = rocket.position?.getValue(time, posScratch);
+        const q = rocket.orientation?.getValue(time, quatScratch);
+        if (!p || !q) {
+          flamePrimitive.show = hasValidFlameTransform;
+          return false;
+        }
+        flamePrimitive.show = true;
+        hasValidFlameTransform = true;
+
+        Cesium.Matrix3.fromQuaternion(q, rotScratch);
+        Cesium.Matrix4.fromRotationTranslation(rotScratch, p, worldScratch);
+        Cesium.Matrix4.multiply(
+          worldScratch,
+          localFlameMatrix,
+          flamePrimitive.modelMatrix,
+        );
+
+        flameMaterial.uniforms.time = Cesium.JulianDate.secondsDifference(
+          time,
+          viewer.clock.startTime,
+        );
+        return true;
+      }
+
+      viewer.scene.preUpdate.addEventListener((scene, time) => {
+        updateFlameForTime(time);
+      });
+
+      try {
+        const dataSource = await Cesium.CzmlDataSource.load("./rocket.czml");
+        await viewer.dataSources.add(dataSource);
+
+        viewer.clockTrackedDataSource = dataSource;
+
+        if (dataSource.clock) {
+          viewer.timeline.zoomTo(dataSource.clock.startTime, dataSource.clock.stopTime);
+        }
+
+        rocket = dataSource.entities.getById("LaunchVehicle/LaunchVehicle1");
+        if (rocket) {
+          viewer.trackedEntity = rocket;
+        }
+
+        await viewer.zoomTo(dataSource);
+        status.textContent = "rocket.czml 加载完成, 尾焰着色器已挂载";
+
+        window.rocketFlame = {
+          viewer,
+          flameMaterial,
+          flameState,
+          getPrimitive: () => flamePrimitive,
+          updateForTime: updateFlameForTime,
+          rebuild: buildFlamePrimitive,
+          rebuildMatrix: () => {
+            localFlameMatrix = buildLocalFlameMatrix();
+          },
+        };
+      } catch (error) {
+        console.error("Failed to load rocket.czml", error);
+        status.textContent = "rocket.czml 加载失败, 请确认通过静态服务器访问项目根目录。";
+        status.classList.add("error");
+      }
+    </script>
+  </body>
+</html>
