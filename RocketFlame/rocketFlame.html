@@ -1,0 +1,117 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Cesium Rocket Flame CZML</title>
+    <script src="https://cesium.com/downloads/cesiumjs/releases/1.138/Build/Cesium/Cesium.js"></script>
+    <link
+      href="https://cesium.com/downloads/cesiumjs/releases/1.138/Build/Cesium/Widgets/widgets.css"
+      rel="stylesheet"
+    />
+    <style>
+      html,
+      body,
+      #cesiumContainer {
+        width: 100%;
+        height: 100%;
+        margin: 0;
+        padding: 0;
+        overflow: hidden;
+      }
+
+      body {
+        font-family:
+          "Microsoft YaHei",
+          "PingFang SC",
+          "Noto Sans CJK SC",
+          sans-serif;
+      }
+
+      .panel {
+        position: absolute;
+        top: 16px;
+        left: 16px;
+        z-index: 10;
+        max-width: 360px;
+        padding: 14px 16px;
+        border: 1px solid rgba(255, 255, 255, 0.18);
+        border-radius: 12px;
+        color: #ffffff;
+        background: rgba(15, 22, 32, 0.78);
+        box-shadow: 0 12px 36px rgba(0, 0, 0, 0.28);
+        backdrop-filter: blur(8px);
+      }
+
+      .panel h1 {
+        margin: 0 0 8px;
+        font-size: 17px;
+      }
+
+      .panel p {
+        margin: 0;
+        color: rgba(255, 255, 255, 0.78);
+        font-size: 13px;
+        line-height: 1.6;
+      }
+
+      .status {
+        margin-top: 10px;
+        color: #7fffd4;
+        font-family: Consolas, "Courier New", monospace;
+        font-size: 12px;
+      }
+
+      .status.error {
+        color: #ff9a9a;
+      }
+    </style>
+  </head>
+  <body>
+    <div id="cesiumContainer"></div>
+    <aside class="panel" aria-live="polite">
+      <h1>Rocket CZML 轨迹</h1>
+      <p>加载同目录下的 <code>rocket.czml</code>，展示火箭模型、姿态、路径和 CZML 时钟动画。</p>
+      <div id="status" class="status">正在加载 rocket.czml...</div>
+    </aside>
+
+    <script type="module">
+      Cesium.Ion.defaultAccessToken =
+        "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJqdGkiOiI4M2ZhYzM4My1lN2NhLTRjNTktODY1OC1jZDdmOTU3Y2ZjMGEiLCJpZCI6MTMwNTAsInNjb3BlcyI6WyJhc3IiLCJnYyJdLCJpYXQiOjE1NjI0NzA5NzB9.rRTs6chsWJdo9KNYe5VjJj2fUzMHeniIJvFQOd0aLJU";
+
+      const status = document.getElementById("status");
+      const viewer = new Cesium.Viewer("cesiumContainer", {
+        terrain: Cesium.Terrain.fromWorldTerrain(),
+        animation: true,
+        timeline: true,
+        shouldAnimate: true,
+      });
+
+      viewer.scene.globe.depthTestAgainstTerrain = true;
+      viewer.scene.globe.enableLighting = true;
+
+      try {
+        const dataSource = await Cesium.CzmlDataSource.load("./rocket.czml");
+        await viewer.dataSources.add(dataSource);
+
+        viewer.clockTrackedDataSource = dataSource;
+
+        if (dataSource.clock) {
+          viewer.timeline.zoomTo(dataSource.clock.startTime, dataSource.clock.stopTime);
+        }
+
+        const rocket = dataSource.entities.getById("LaunchVehicle/LaunchVehicle1");
+        if (rocket) {
+          viewer.trackedEntity = rocket;
+        }
+
+        await viewer.zoomTo(dataSource);
+        status.textContent = "rocket.czml 加载完成";
+      } catch (error) {
+        console.error("Failed to load rocket.czml", error);
+        status.textContent = "rocket.czml 加载失败，请确认通过静态服务器访问项目根目录。";
+        status.classList.add("error");
+      }
+    </script>
+  </body>
+</html>
