@@ -61,10 +61,11 @@ http://localhost:8000/RocketFlame/rocketFlame.html
    不包含 `st`, 会导致 shader 中 `materialInput.st` 没有真实 UV。
    渲染状态使用 additive blending, `depthMask=false`, `cull=false`, 并关闭尾焰自身 `depthTest`,
    让透明发光烟焰不被发射台地形或火箭模型深度遮掉。
-4. 位姿同步: 在 `scene.preUpdate` 内读取 `rocket.position.getValue(time)` /
+4. 位姿同步: 通过 `updateFlameTransform(time)` 读取 `rocket.position.getValue(time)` /
    `rocket.orientation.getValue(time)`, 用 `Matrix4.fromRotationTranslation` 拼出
    火箭世界变换 W; 再左乘一个 "本体坐标系内, 把 cross-plane 从 +Z 方向旋到火箭尾喷方向, 并平移到尾部" 的局部矩阵 L,
    写入 `flamePrimitive.modelMatrix = W * L`, 同时把 `clock` 的相对秒数写入 `material.uniforms.time`。
+   `scene.preUpdate` 和页面暴露的调试接口共用同一个函数, 便于把时钟暂停到指定 CZML 时间后稳定验证尾焰贴合位置。
 
 ### 本体坐标系约定
 

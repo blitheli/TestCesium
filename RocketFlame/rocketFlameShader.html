@@ -428,14 +428,14 @@
       const rotScratch = new Cesium.Matrix3();
       const worldScratch = new Cesium.Matrix4();
 
-      viewer.scene.preUpdate.addEventListener((scene, time) => {
-        if (!rocket || !flamePrimitive) return;
+      function updateFlameForTime(time) {
+        if (!rocket || !flamePrimitive) return false;
 
         const p = rocket.position?.getValue(time, posScratch);
         const q = rocket.orientation?.getValue(time, quatScratch);
         if (!p || !q) {
           flamePrimitive.show = false;
-          return;
+          return false;
         }
         flamePrimitive.show = true;
 
@@ -451,6 +451,11 @@
           time,
           viewer.clock.startTime,
         );
+        return true;
+      }
+
+      viewer.scene.preUpdate.addEventListener((scene, time) => {
+        updateFlameForTime(time);
       });
 
       try {
@@ -476,6 +481,7 @@
           flameMaterial,
           flameState,
           getPrimitive: () => flamePrimitive,
+          updateForTime: updateFlameForTime,
           rebuild: buildFlamePrimitive,
           rebuildMatrix: () => {
             localFlameMatrix = buildLocalFlameMatrix();
