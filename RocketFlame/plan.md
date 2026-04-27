@@ -49,20 +49,20 @@ http://localhost:8000/RocketFlame/rocketFlame.html
 ### 关键点
 
 1. 几何体: 使用两张互相垂直的 `PlaneGeometry` 组成 cross-plane Primitive。
-   `reference.tsx` 的 shader 依赖平面 UV, 所以 Cesium 侧需要让 `st.s` 表示横向,
+  `reference.tsx` 的 shader 依赖平面 UV, 所以 Cesium 侧需要让 `st.s` 表示横向,
    `st.t` 表示喷射轴向, 而不是使用 `CylinderGeometry` 的周向 `s`。
 2. 材质: `new Cesium.Material({ fabric: { uniforms: { time, coreColor, flameColor, smokeColor, farSmokeColor, intensity, turbulenceAmount, ringCount, ringContrast }, source } })`。
-   shader 参考 `reference.tsx` 的 2D fbm 尾焰逻辑, 用沿轴向滚动的湍流生成高温核心, 橙色火焰和远端烟羽。
+  shader 参考 `reference.tsx` 的 2D fbm 尾焰逻辑, 用沿轴向滚动的湍流生成高温核心, 橙色火焰和远端烟羽。
    同时加入静态马赫环: `ringCount` 控制亮盘数量, `ringContrast` 控制亮盘强度。
    颜色由远端烟雾过渡到橙色火焰, 再到白黄色核心。
    `czm_materialInput.st` 来自 `PlaneGeometry` 的 UV: `s` 是横向, `t` 是轴向 (0=喷口, 1=尖端)。
 3. 外观: `MaterialAppearance({ materialSupport: TEXTURED, material, translucent: true, closed: false })`。
-   需要 `TEXTURED.vertexFormat`, 因为 Cesium 1.138 的 `MaterialSupport.BASIC.vertexFormat`
+  需要 `TEXTURED.vertexFormat`, 因为 Cesium 1.138 的 `MaterialSupport.BASIC.vertexFormat`
    不包含 `st`, 会导致 shader 中 `materialInput.st` 没有真实 UV。
    渲染状态使用 additive blending, `depthMask=false`, `cull=false`, 并关闭尾焰自身 `depthTest`,
    让透明发光烟焰不被发射台地形或火箭模型深度遮掉。
 4. 位姿同步: 通过 `updateFlameTransform(time)` 读取 `rocket.position.getValue(time)` /
-   `rocket.orientation.getValue(time)`, 用 `Matrix4.fromRotationTranslation` 拼出
+  `rocket.orientation.getValue(time)`, 用 `Matrix4.fromRotationTranslation` 拼出
    火箭世界变换 W; 再左乘一个 "本体坐标系内, 把 cross-plane 从 +Z 方向旋到火箭尾喷方向, 并平移到尾部" 的局部矩阵 L,
    写入 `flamePrimitive.modelMatrix = W * L`, 同时把 `clock` 的相对秒数写入 `material.uniforms.time`。
    `scene.preUpdate` 和页面暴露的调试接口共用同一个函数, 便于把时钟暂停到指定 CZML 时间后稳定验证尾焰贴合位置。
@@ -87,3 +87,27 @@ http://localhost:8000/RocketFlame/rocketFlameShader.html
 - 起飞 ~120s 后从倾斜后方观察可见橙黄尾焰从火箭尾部喷出, 颜色由喷口端的暖白过渡到橙色和灰色烟羽, 透明度沿轴向衰减。
 - 火箭随 CZML 姿态翻转时, 尾焰始终贴尾喷口、沿火箭本体 -Z 方向延伸。
 - 调小 `尾焰长度` / `尾焰半径` 或修改 `尾部偏移`, 可以让火焰更收紧或更贴近喷口。
+
+## 尾焰 CustomShader 挂到 glb 内火焰片 (rocketFlameShader2.html)
+
+### 目标
+
+不再使用独立 `Primitive` cross-plane, 而是通过 `entity.model.customShader = new Cesium.ConstantProperty(customShader)` 把 `Cesium.CustomShader` 应用到 CZML 加载的同一套 `launchvehicle.glb` 上。
+
+### 如何只改火焰片
+
+Cesium 的 `CustomShader` 作用于整颗 Model, 因此在 `fragmentMain` 里对非火焰材质直接 `return`, 保留 glTF 原有 PBR 结果。本仓库 glb 中火焰相关 mesh 共用材质 `Flames` (`emissiveFactor` 高, `alphaMode: BLEND`), 片段阶段用 `emissive` 阈值, 并辅以「`baseColor.rgb` 近黑且略有自发光」判定, 避免贴图未完全就绪时完全匹配不到。
+
+**重要**: 不要在 `CustomShader` 上设置 `lightingModel: UNLIT`, 否则会覆盖整箭光照, 箭体 PBR 会失效并出现整块异常底色。`translucencyMode` 应使用 `INHERIT`, 让不透明箭体走 opaque、仅 `BLEND` 火焰片走 translucent, 而不要 `TRANSLUCENT` 强制整模半透明。
+
+### 与 rocketFlameShader.html 的差异
+
+- 尾焰形状与 UV 来自模型内平面 mesh, 用 `v_flameUv = texCoord_0 * u_uvScale` 做可调缩放; 不再维护 `modelMatrix` 与尾喷轴向 `axis` 等 Primitive 专用逻辑。
+- 着色仍沿用同一套 fbm + 马赫环思路, 输出写到 `czm_modelMaterial` 的 `emissive` / `alpha`; 不强制整模 `UNLIT`, 由 glTF 材质继承光照与半透明模式。
+
+### 验证
+
+```text
+http://localhost:8000/RocketFlame/rocketFlameShader2.html
+```
+
