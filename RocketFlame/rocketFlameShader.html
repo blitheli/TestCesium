@@ -423,6 +423,7 @@
       });
 
       let rocket = null;
+      let hasValidFlameTransform = false;
       const posScratch = new Cesium.Cartesian3();
       const quatScratch = new Cesium.Quaternion();
       const rotScratch = new Cesium.Matrix3();
@@ -434,10 +435,11 @@
         const p = rocket.position?.getValue(time, posScratch);
         const q = rocket.orientation?.getValue(time, quatScratch);
         if (!p || !q) {
-          flamePrimitive.show = false;
+          flamePrimitive.show = hasValidFlameTransform;
           return false;
         }
         flamePrimitive.show = true;
+        hasValidFlameTransform = true;
 
         Cesium.Matrix3.fromQuaternion(q, rotScratch);
         Cesium.Matrix4.fromRotationTranslation(rotScratch, p, worldScratch);

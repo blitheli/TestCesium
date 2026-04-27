@@ -66,6 +66,7 @@ http://localhost:8000/RocketFlame/rocketFlame.html
    火箭世界变换 W; 再左乘一个 "本体坐标系内, 把 cross-plane 从 +Z 方向旋到火箭尾喷方向, 并平移到尾部" 的局部矩阵 L,
    写入 `flamePrimitive.modelMatrix = W * L`, 同时把 `clock` 的相对秒数写入 `material.uniforms.time`。
    `scene.preUpdate` 和页面暴露的调试接口共用同一个函数, 便于把时钟暂停到指定 CZML 时间后稳定验证尾焰贴合位置。
+   当 CZML 在极短时间片内取不到姿态样本时, 保留最近一次有效位姿, 避免尾焰在暂停或手动拖动时间轴时闪烁消失。
 
 ### 本体坐标系约定
 
