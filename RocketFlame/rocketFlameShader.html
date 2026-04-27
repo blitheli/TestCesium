@@ -104,15 +104,15 @@
 
       <div class="controls">
         <label for="lengthRange">尾焰长度</label>
-        <input id="lengthRange" type="range" min="2" max="60" step="0.5" value="22" />
+        <input id="lengthRange" type="range" min="2" max="80" step="0.5" value="60" />
         <span class="value" id="lengthValue">22.0 m</span>
 
         <label for="radiusRange">尾焰半径</label>
-        <input id="radiusRange" type="range" min="0.2" max="8" step="0.1" value="2.5" />
+        <input id="radiusRange" type="range" min="0.2" max="8" step="0.1" value="5" />
         <span class="value" id="radiusValue">2.5 m</span>
 
         <label for="offsetRange">尾部偏移</label>
-        <input id="offsetRange" type="range" min="-10" max="60" step="0.1" value="20.5" />
+        <input id="offsetRange" type="range" min="-10" max="60" step="0.1" value="31" />
         <span class="value" id="offsetValue">20.5 m</span>
 
         <label for="axisSelect">尾喷方向</label>
@@ -144,6 +144,7 @@
 
       viewer.scene.globe.depthTestAgainstTerrain = true;
       viewer.scene.globe.enableLighting = true;
+      viewer.useBrowserRecommendedResolution = false;
 
       const flameState = {
         length: 22.0,
