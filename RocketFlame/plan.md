@@ -114,5 +114,7 @@ http://localhost:8000/RocketFlame/rocketFlameShader2.html
 ## flamePlane 节点尾焰 (rocketFlameShader3.html)
 
 - 使用 `simpleRocket.czml` 与 `model/simpleRocket.glb`, glTF 节点名 **flamePlane**。
-- Cesium 片元无节点名字符串，用 `positionMC` 与 `FLAME_PLANE_BB_MIN/MAX` + `u_bbInflate` 裁切；JS 用 `model.getNode("flamePlane")` 做检测。
+- Cesium 的 `CustomShader` 作用于整颗 Model；片元用 `positionMC` 与 `u_flameBbMin/Max` + `u_bbInflate` 裁切，仅 flamePlane mesh 上的像素执行尾焰。
+- `Model.ready` 后从 `getNode("flamePlane")._runtimeNode.runtimePrimitives` 读取各 primitive 的 `boundingSphere`（与 `positionMC` 同属 mesh 局部空间），包成 AABB 写入 uniform；失败时回退页面默认 `FLAME_PLANE_BB_*`。
+- 顶点阶段在裁切盒内做法向脉动（随 `u_time` / `normalMC`），片元叠加 `flicker`，与原有 fbm + 马赫环形成动态尾焰。
 - 验证：`http://localhost:8000/RocketFlame/rocketFlameShader3.html`

@@ -114,12 +114,14 @@
   <body>
     <div id="cesiumContainer"></div>
     <aside class="panel" aria-live="polite">
-      <h1>Rocket 尾焰 (flamePlane 节点)</h1>
+      <h1>Rocket 尾焰 (flamePlane mesh)</h1>
       <p>
         本页使用 <code>RocketFlame/simpleRocket.czml</code> 与 <code>model/simpleRocket.glb</code>。glb 内节点名
-        <code>flamePlane</code> 为尾气片。因 Cesium <code>CustomShader</code> 作用于整颗 Model, 片元用
-        <code>positionMC</code> 与包围盒常量 <code>FLAME_PLANE_BB_*</code> 过滤, 仅盒内执行尾焰; 替换 glb 后请同步常量。
-        脚本会 <code>getNode("flamePlane")</code> 做存在性检查。不写 <code>lightingModel</code>, <code>translucencyMode: INHERIT</code>。
+        <code>flamePlane</code> 为尾气 mesh。CustomShader 仍挂在整颗 Model 上, 但在
+        <code>Model.ready</code> 后从 <code>flamePlane</code> 的 runtime primitive 读取顶点
+        <code>POSITION</code> 的包围体, 写入 <code>u_flameBbMin/Max</code>, 使裁切框与 glb 内 mesh 对齐; 若读取失败则回退到默认常量。
+        顶点阶段对盒内顶点做法向脉动, 片元阶段滚动感 + 轻微亮度闪动。不写 <code>lightingModel</code>,
+        <code>translucencyMode: INHERIT</code>。
       </p>
 
       <div class="controls">
@@ -187,8 +189,8 @@
         return new Cesium.Cartesian4(c.red, c.green, c.blue, c.alpha);
       }
 
-      const FLAME_PLANE_BB_MIN = new Cesium.Cartesian3(-1.0, -1.0, -20.0);
-      const FLAME_PLANE_BB_MAX = new Cesium.Cartesian3(1.0, 1.0, -20.0);
+      const FLAME_PLANE_BB_MIN = new Cesium.Cartesian3(-2.0, -2.0, -22.0);
+      const FLAME_PLANE_BB_MAX = new Cesium.Cartesian3(2.0, 2.0, 2.0);
 
       const flameUniforms = {
         u_time: { type: Cesium.UniformType.FLOAT, value: 0.0 },
@@ -228,8 +230,31 @@
           v_flameUv: Cesium.VaryingType.VEC2,
         },
         vertexShaderText: `
+          bool flameVolumeContains(vec3 p) {
+            vec3 eps = vec3(u_bbInflate);
+            vec3 bmin = u_flameBbMin - eps;
+            vec3 bmax = u_flameBbMax + eps;
+            return all(greaterThanEqual(p, bmin)) && all(lessThanEqual(p, bmax));
+          }
+
           void vertexMain(VertexInput vsInput, inout czm_modelVertexOutput vsOutput) {
             v_flameUv = vsInput.attributes.texCoord_0 * u_uvScale;
+            vec3 p = vsOutput.positionMC;
+            if (flameVolumeContains(p)) {
+              float tv = clamp(v_flameUv.y, 0.0, 1.0);
+              float along = mix(tv, 1.0 - tv, step(0.5, u_flipAlong));
+              vec3 n = vsInput.attributes.normalMC;
+              float nlen2 = dot(n, n);
+              if (nlen2 > 1e-6) {
+                n = normalize(n);
+              } else {
+                n = vec3(0.0, 0.0, 1.0);
+              }
+              float w = sin(u_time * 22.0 + along * 14.0 + p.x * 3.7) * 0.55
+                + sin(u_time * 9.0 - along * 6.0 + p.y * 2.1) * 0.35;
+              float amp = (0.012 + along * 0.028) * u_turbulenceAmount;
+              vsOutput.positionMC = p + n * (w * amp);
+            }
           }
         `,
         fragmentShaderText: `
@@ -323,11 +348,15 @@
               discard;
             }
 
+            float flicker = 0.90 + 0.10 * sin(u_time * 40.0 + lateral * 9.0)
+              + 0.05 * sin(u_time * 73.0 - along * 20.0);
+
             material.diffuse = vec3(0.0);
             material.emissive =
               col *
               (0.85 + 2.8 * alpha + ringBoost * 0.9) *
-              u_flameEmissiveBoost;
+              u_flameEmissiveBoost *
+              flicker;
             material.alpha = alpha;
             material.specular = vec3(0.0);
             material.roughness = 1.0;
@@ -382,6 +411,49 @@
         document.getElementById(id).dispatchEvent(new Event("input"));
       }
 
+      /**
+       * flamePlane mesh 的 vertex position 与 runtimePrimitive.boundingSphere 同属 glTF primitive 局部坐标,
+       * 与 fsInput.attributes.positionMC 一致。将 sphere 扩张为轴对齐盒后写入 shader uniform。
+       */
+      function applyFlamePlaneBoundingFromModel(modelPrimitive) {
+        const node = modelPrimitive.getNode("flamePlane");
+        const runtimeNode = node && node._runtimeNode;
+        const primitives = runtimeNode && runtimeNode.runtimePrimitives;
+        if (!primitives || primitives.length === 0) {
+          return false;
+        }
+
+        let minX = Number.POSITIVE_INFINITY;
+        let minY = Number.POSITIVE_INFINITY;
+        let minZ = Number.POSITIVE_INFINITY;
+        let maxX = Number.NEGATIVE_INFINITY;
+        let maxY = Number.NEGATIVE_INFINITY;
+        let maxZ = Number.NEGATIVE_INFINITY;
+
+        for (let i = 0; i < primitives.length; i++) {
+          const bs = primitives[i].boundingSphere;
+          if (!Cesium.defined(bs) || !Number.isFinite(bs.radius)) {
+            continue;
+          }
+          const c = bs.center;
+          const r = bs.radius;
+          minX = Math.min(minX, c.x - r);
+          minY = Math.min(minY, c.y - r);
+          minZ = Math.min(minZ, c.z - r);
+          maxX = Math.max(maxX, c.x + r);
+          maxY = Math.max(maxY, c.y + r);
+          maxZ = Math.max(maxZ, c.z + r);
+        }
+
+        if (!Number.isFinite(minX)) {
+          return false;
+        }
+
+        flameCustomShader.setUniform("u_flameBbMin", new Cesium.Cartesian3(minX, minY, minZ));
+        flameCustomShader.setUniform("u_flameBbMax", new Cesium.Cartesian3(maxX, maxY, maxZ));
+        return true;
+      }
+
       function attachCustomShaderToEntityModel(entity, shader) {
         const wantId = entity.id;
         for (let i = 0; i < viewer.scene.primitives.length; i++) {
@@ -426,6 +498,7 @@
 
         function refreshFlamePlaneStatus() {
           let nodeMsg = " (检测 flamePlane 节点...)";
+          let bbMsg = "";
           try {
             for (let i = 0; i < viewer.scene.primitives.length; i++) {
               const p = viewer.scene.primitives.get(i);
@@ -437,17 +510,27 @@
                 (p.id === rocket || (rocket && p.id.id === rocket.id))
               ) {
                 const n = p.getNode("flamePlane");
+                const synced = applyFlamePlaneBoundingFromModel(p);
                 nodeMsg = n
                   ? " 已检测到 glTF 节点 flamePlane。"
                   : " 未检测到节点 flamePlane, 请核对 glb。";
+                bbMsg = synced
+                  ? " 裁切 AABB 已从 flamePlane mesh 包围体同步。"
+                  : " 裁切 AABB 使用页面默认常量 (未读到 mesh 包围体时核对 glb / Cesium 版本)。";
                 break;
               }
             }
           } catch (_) {
             nodeMsg = "";
           }
+          if (!bbMsg) {
+            bbMsg =
+              " 裁切 AABB 将在 Model ready 后从 flamePlane mesh 同步, 否则使用默认常量。";
+          }
           status.textContent =
-            "simpleRocket.czml 已加载, 尾焰仅作用于 positionMC 包围盒内 (对应 flamePlane 片元)。" + nodeMsg;
+            "simpleRocket.czml 已加载, 尾焰仅作用于 flamePlane 的 positionMC 裁切盒内。" +
+            bbMsg +
+            nodeMsg;
         }
 
         if (rocket && rocket.model) {
@@ -473,6 +556,7 @@
           flameCustomShader,
           rocket,
           attachCustomShaderToEntityModel,
+          applyFlamePlaneBoundingFromModel,
           FLAME_PLANE_BB_MIN,
           FLAME_PLANE_BB_MAX,
         };
