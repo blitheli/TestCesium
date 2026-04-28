@@ -42,7 +42,8 @@
       {
         vec4 outColor = color;
         czm_material material = czm_getDefaultMaterial(materialInput);
-        material.diffuse = czm_gammaCorrect(outColor.rgb);
+        float time = czm_frameNumber / 60.0;
+        material.diffuse = czm_gammaCorrect(outColor.rgb * abs(sin(time)));
         material.alpha = outColor.a;
         return material;
       }
