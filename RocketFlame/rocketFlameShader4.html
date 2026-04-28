@@ -61,9 +61,15 @@
         `,
         fragmentShaderText: `
           void fragmentMain(FragmentInput fsInput, inout czm_modelMaterial material) {
-          
-            material.diffuse = vec3(0.0, 1.0, 1.0);
-            material.emissive = vec3(1.0, 1.0, 0.0);
+           float mask = fsInput.attributes.color_0.r;
+            //  这里是火焰的mesh 
+            if (mask < 0.3) {
+              material.diffuse = vec3(0.0, 0.0, 1.0);
+              
+            } else {
+              material.diffuse = vec3(0.0, 1.0, 0.0);
+            }            
+            material.emissive = vec3(0.0);
             material.alpha = 1.0;
             material.specular = vec3(0.0);
             material.roughness = 1.0;
