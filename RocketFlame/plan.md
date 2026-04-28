@@ -118,3 +118,9 @@ http://localhost:8000/RocketFlame/rocketFlameShader2.html
 - `Model.ready` 后从 `getNode("flamePlane")._runtimeNode.runtimePrimitives` 读取各 primitive 的 `boundingSphere`（与 `positionMC` 同属 mesh 局部空间），包成 AABB 写入 uniform；失败时回退页面默认 `FLAME_PLANE_BB_*`。
 - 顶点阶段在裁切盒内做法向脉动（随 `u_time` / `normalMC`），片元叠加 `flicker`，与原有 fbm + 马赫环形成动态尾焰。
 - 验证：`http://localhost:8000/RocketFlame/rocketFlameShader3.html`
+
+## rocketFlameShader4.html (从 rocketFlameShader 移植到 flamePlane)
+
+- 与 `rocketFlameShader3.html` 相同的实现策略: `CustomShader` + `flamePlane` 的 `positionMC` AABB 裁切 + `texCoord_0` 模拟原 `PlaneGeometry` 的 `st` (横向 s, 轴向 t)。
+- 片元核心为 `rocketFlameShader.html` 中 `czm_getMaterial` 的 fbm + 马赫环逻辑, 适配为写入 `czm_modelMaterial.emissive` / `alpha`; 顶点在盒内做法向脉动, 片元加 `flicker`。
+- 验证: `http://localhost:8000/RocketFlame/rocketFlameShader4.html`
