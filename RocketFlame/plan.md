@@ -87,3 +87,26 @@ http://localhost:8000/RocketFlame/rocketFlameShader.html
 - 起飞 ~120s 后从倾斜后方观察可见橙黄尾焰从火箭尾部喷出, 颜色由喷口端的暖白过渡到橙色和灰色烟羽, 透明度沿轴向衰减。
 - 火箭随 CZML 姿态翻转时, 尾焰始终贴尾喷口、沿火箭本体 -Z 方向延伸。
 - 调小 `尾焰长度` / `尾焰半径` 或修改 `尾部偏移`, 可以让火焰更收紧或更贴近喷口。
+
+## 尾焰 CustomShader 挂到 glb 内火焰片 (rocketFlameShader2.html)
+
+### 目标
+
+不再使用独立 `Primitive` cross-plane, 而是通过 `entity.model.customShader = new Cesium.ConstantProperty(customShader)` 把 `Cesium.CustomShader` 应用到 CZML 加载的同一套 `launchvehicle.glb` 上。
+
+### 如何只改火焰片
+
+Cesium 的 `CustomShader` 作用于整颗 Model, 因此在 `fragmentMain` 里对非火焰材质直接 `return`, 保留 glTF 原有 PBR 结果。本仓库 glb 中火焰相关 mesh 共用材质 `Flames` (`emissiveFactor` 高, `alphaMode: BLEND`, 暗色 `baseColorTexture`)。片段阶段用 `length(emissive)` 阈值, 并辅以 **`max(baseColor.r,g,b)`** 低于阈值判定暗底板 (勿用 `length(rgb)`)。`Model.ready` 后再对 `Model` Primitive 赋一次 `customShader`, 并用 `entity.id` 字符串匹配避免因引用不同挂载失败。
+
+**重要**: 不要在 `CustomShader` 上设置 `lightingModel: UNLIT`, 否则会覆盖整箭光照。`translucencyMode` 应使用 `INHERIT`。面板侧可加大自发光倍增、软化尖端 `farFade`、勾选反转 UV-Y 以适配喷口在纹理 v 轴哪一侧。
+
+### 与 rocketFlameShader.html 的差异
+
+- 尾焰形状与 UV 来自模型内平面 mesh, 用 `v_flameUv = texCoord_0 * u_uvScale` 做可调缩放。
+- 着色仍沿用同一套 fbm + 马赫环思路, 输出写到 `czm_modelMaterial` 的 `emissive` / `alpha`。
+
+### 验证
+
+```text
+http://localhost:8000/RocketFlame/rocketFlameShader2.html
+```
