@@ -1,0 +1,138 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Cesium Rocket Flame Shader (flamePlane, 纯色)</title>
+    <script src="https://cesium.com/downloads/cesiumjs/releases/1.138/Build/Cesium/Cesium.js"></script>
+    <link
+      href="https://cesium.com/downloads/cesiumjs/releases/1.138/Build/Cesium/Widgets/widgets.css"
+      rel="stylesheet"
+    />
+    <style>
+      html,
+      body,
+      #cesiumContainer {
+        width: 100%;
+        height: 100%;
+        margin: 0;
+        padding: 0;
+        overflow: hidden;
+      }
+
+      body {
+        font-family:
+          "Microsoft YaHei",
+          "PingFang SC",
+          "Noto Sans CJK SC",
+          sans-serif;
+      }
+    </style>
+  </head>
+  <body>
+    <div id="cesiumContainer"></div>
+
+    <script type="module">
+      Cesium.Ion.defaultAccessToken =
+        "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJqdGkiOiI4M2ZhYzM4My1lN2NhLTRjNTktODY1OC1jZDdmOTU3Y2ZjMGEiLCJpZCI6MTMwNTAsInNjb3BlcyI6WyJhc3IiLCJnYyJdLCJpYXQiOjE1NjI0NzA5NzB9.rRTs6chsWJdo9KNYe5VjJj2fUzMHeniIJvFQOd0aLJU";
+
+      const viewer = new Cesium.Viewer("cesiumContainer", {
+        terrain: Cesium.Terrain.fromWorldTerrain(),
+        animation: true,
+        timeline: true,
+        shouldAnimate: false,
+        orderIndependentTranslucency: false,
+      });
+
+      viewer.scene.globe.depthTestAgainstTerrain = true;
+      viewer.scene.globe.enableLighting = true;
+      viewer.scene.highDynamicRange = true;
+      viewer.useBrowserRecommendedResolution = false;
+
+      const FLAME_PLANE_BB_MIN = new Cesium.Cartesian3(-1.0, -1.0, -20.0);
+      const FLAME_PLANE_BB_MAX = new Cesium.Cartesian3(1.0, 1.0, -20.0);
+      const FLAME_BB_INFLATE = 3.0;
+
+      const flameCustomShader = new Cesium.CustomShader({
+        mode: Cesium.CustomShaderMode.MODIFY_MATERIAL,
+        translucencyMode: Cesium.CustomShaderTranslucencyMode.INHERIT,
+        vertexShaderText: `
+          void vertexMain(VertexInput vsInput, inout czm_modelVertexOutput vsOutput) {}
+        `,
+        fragmentShaderText: `
+          void fragmentMain(FragmentInput fsInput, inout czm_modelMaterial material) {
+          
+            material.diffuse = vec3(0.0, 1.0, 1.0);
+            material.emissive = vec3(1.0, 1.0, 0.0);
+            material.alpha = 1.0;
+            material.specular = vec3(0.0);
+            material.roughness = 1.0;
+          }
+        `,
+      });
+
+      function attachCustomShaderToEntityModel(entity, shader) {
+        const wantId = entity.id;
+        for (let i = 0; i < viewer.scene.primitives.length; i++) {
+          const p = viewer.scene.primitives.get(i);
+          const sameEntity =
+            p instanceof Cesium.Model &&
+            p.id &&
+            (p.id === entity || p.id.id === wantId);
+          if (sameEntity) {
+            const apply = () => {
+              p.customShader = shader;
+            };
+            if (p.ready) {
+              apply();
+            } else {
+              p.readyEvent.addEventListener(apply);
+            }
+            return true;
+          }
+        }
+        return false;
+      }
+
+      try {
+        const dataSource = await Cesium.CzmlDataSource.load("./simpleRocket.czml");
+        await viewer.dataSources.add(dataSource);
+
+        viewer.clockTrackedDataSource = dataSource;
+
+        if (dataSource.clock) {
+          viewer.timeline.zoomTo(dataSource.clock.startTime, dataSource.clock.stopTime);
+        }
+
+        const rocket = dataSource.entities.getById("LaunchVehicle/LaunchVehicle1");
+
+        if (rocket && rocket.model) {
+          rocket.model.incrementallyLoadTextures = new Cesium.ConstantProperty(false);
+          rocket.model.customShader = new Cesium.ConstantProperty(flameCustomShader);
+          viewer.trackedEntity = rocket;
+
+          function tryAttachPrimitiveShader() {
+            if (attachCustomShaderToEntityModel(rocket, flameCustomShader)) {
+              viewer.scene.postUpdate.removeEventListener(tryAttachPrimitiveShader);
+            }
+          }
+          viewer.scene.postUpdate.addEventListener(tryAttachPrimitiveShader);
+          tryAttachPrimitiveShader();
+        }
+
+        await viewer.zoomTo(dataSource);
+
+        window.rocketFlameMesh4 = {
+          viewer,
+          flameCustomShader,
+          rocket,
+          attachCustomShaderToEntityModel,
+          FLAME_PLANE_BB_MIN,
+          FLAME_PLANE_BB_MAX,
+        };
+      } catch (error) {
+        console.error("Failed to load simpleRocket.czml", error);
+      }
+    </script>
+  </body>
+</html>

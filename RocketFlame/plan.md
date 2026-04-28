@@ -110,3 +110,9 @@ Cesium 的 `CustomShader` 作用于整颗 Model, 因此在 `fragmentMain` 里对
 ```text
 http://localhost:8000/RocketFlame/rocketFlameShader2.html
 ```
+
+## flamePlane 节点尾焰 (rocketFlameShader3.html)
+
+- 使用 `simpleRocket.czml` 与 `model/simpleRocket.glb`, glTF 节点名 **flamePlane**。
+- Cesium 片元无节点名字符串，用 `positionMC` 与 `FLAME_PLANE_BB_MIN/MAX` + `u_bbInflate` 裁切；JS 用 `model.getNode("flamePlane")` 做检测。
+- 验证：`http://localhost:8000/RocketFlame/rocketFlameShader3.html`

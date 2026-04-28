@@ -3,7 +3,7 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>Cesium Rocket Flame Shader (GLB Mesh)</title>
+    <title>Cesium Rocket Flame Shader (flamePlane)</title>
     <script src="https://cesium.com/downloads/cesiumjs/releases/1.138/Build/Cesium/Cesium.js"></script>
     <link
       href="https://cesium.com/downloads/cesiumjs/releases/1.138/Build/Cesium/Widgets/widgets.css"
@@ -114,17 +114,19 @@
   <body>
     <div id="cesiumContainer"></div>
     <aside class="panel" aria-live="polite">
-      <h1>Rocket 尾焰 (模型内 Mesh)</h1>
+      <h1>Rocket 尾焰 (flamePlane 节点)</h1>
       <p>
-        使用 <code>ModelGraphics.customShader</code> 将 <code>Cesium.CustomShader</code> 挂到 CZML
-        实体模型上。<code>CustomShader</code> 不写 <code>lightingModel</code>、并用
-        <code>translucencyMode: INHERIT</code>, 避免整箭被当成 UNLIT/全透明而破坏本体 PBR。
-        火焰片识别: <code>length(emissive)</code> 超过阈值, 或底板
-        <code>max(baseColor.r,g,b)</code> 低于阈值 (适配 <code>Flames</code> 的暗色 baseColor 贴图,
-        不能再用 <code>length(rgb)</code>)。模型 <code>ready</code> 后会对 Primitive 再挂一次 shader。
+        本页使用 <code>RocketFlame/simpleRocket.czml</code> 与 <code>model/simpleRocket.glb</code>。glb 内节点名
+        <code>flamePlane</code> 为尾气片。因 Cesium <code>CustomShader</code> 作用于整颗 Model, 片元用
+        <code>positionMC</code> 与包围盒常量 <code>FLAME_PLANE_BB_*</code> 过滤, 仅盒内执行尾焰; 替换 glb 后请同步常量。
+        脚本会 <code>getNode("flamePlane")</code> 做存在性检查。不写 <code>lightingModel</code>, <code>translucencyMode: INHERIT</code>。
       </p>
 
       <div class="controls">
+        <label for="bbInflateRange">包围盒膨胀 (米)</label>
+        <input id="bbInflateRange" type="range" min="0.5" max="8" step="0.25" value="3" />
+        <span class="value" id="bbInflateValue">3.00</span>
+
         <label for="uvScaleXRange">UV 横向缩放 (半径感)</label>
         <input id="uvScaleXRange" type="range" min="0.35" max="2.5" step="0.05" value="1" />
         <span class="value" id="uvScaleXValue">1.00</span>
@@ -132,14 +134,6 @@
         <label for="uvScaleYRange">UV 轴向缩放 (长度感)</label>
         <input id="uvScaleYRange" type="range" min="0.35" max="2.5" step="0.05" value="1" />
         <span class="value" id="uvScaleYValue">1.00</span>
-
-        <label for="emMinRange">emissive 长度阈值</label>
-        <input id="emMinRange" type="range" min="0.02" max="0.8" step="0.02" value="0.06" />
-        <span class="value" id="emMinValue">0.06</span>
-
-        <label for="baseMaxRange">底板 max(R,G,B) 阈值 (低于视为火焰片)</label>
-        <input id="baseMaxRange" type="range" min="0.05" max="0.45" step="0.01" value="0.22" />
-        <span class="value" id="baseMaxValue">0.22</span>
 
         <label for="intensityRange">强度</label>
         <input id="intensityRange" type="range" min="0.4" max="2.2" step="0.05" value="1.35" />
@@ -157,17 +151,17 @@
         <input id="ringContrastRange" type="range" min="0" max="1.2" step="0.05" value="0.4" />
         <span class="value" id="ringContrastValue">0.40</span>
 
-        <label for="emBoostRange">自发光倍增 (PBR 下建议偏大)</label>
+        <label for="emBoostRange">自发光倍增</label>
         <input id="emBoostRange" type="range" min="1" max="12" step="0.5" value="4" />
         <span class="value" id="emBoostValue">4.0</span>
 
         <div class="control-full flip-row">
           <input type="checkbox" id="flipAlongCheck" />
-          <label for="flipAlongCheck">反转 UV-Y (仍看不见时勾选, 喷口可能在纹理 v=1 侧)</label>
+          <label for="flipAlongCheck">反转 UV-Y (喷口方向与纹理 v 轴不一致时试用)</label>
         </div>
       </div>
 
-      <div id="status" class="status">正在加载 rocket.czml...</div>
+      <div id="status" class="status">正在加载 simpleRocket.czml...</div>
     </aside>
 
     <script type="module">
@@ -193,14 +187,15 @@
         return new Cesium.Cartesian4(c.red, c.green, c.blue, c.alpha);
       }
 
+      const FLAME_PLANE_BB_MIN = new Cesium.Cartesian3(-1.0, -1.0, -20.0);
+      const FLAME_PLANE_BB_MAX = new Cesium.Cartesian3(1.0, 1.0, -20.0);
+
       const flameUniforms = {
         u_time: { type: Cesium.UniformType.FLOAT, value: 0.0 },
         u_uvScale: { type: Cesium.UniformType.VEC2, value: new Cesium.Cartesian2(1.0, 1.0) },
-        u_flameEmissiveMin: { type: Cesium.UniformType.FLOAT, value: 0.06 },
-        u_flameBaseMaxRgb: {
-          type: Cesium.UniformType.FLOAT,
-          value: 0.22,
-        },
+        u_flameBbMin: { type: Cesium.UniformType.VEC3, value: Cesium.Cartesian3.clone(FLAME_PLANE_BB_MIN) },
+        u_flameBbMax: { type: Cesium.UniformType.VEC3, value: Cesium.Cartesian3.clone(FLAME_PLANE_BB_MAX) },
+        u_bbInflate: { type: Cesium.UniformType.FLOAT, value: 3.0 },
         u_coreColor: {
           type: Cesium.UniformType.VEC4,
           value: colorToVec4(Cesium.Color.fromCssColorString("#ffe6a8")),
@@ -269,14 +264,11 @@
           }
 
           void fragmentMain(FragmentInput fsInput, inout czm_modelMaterial material) {
-            float emLen = length(material.emissive);
-            float baseMax = max(
-              max(material.baseColor.r, material.baseColor.g),
-              material.baseColor.b
-            );
-            bool isFlameLike =
-              emLen >= u_flameEmissiveMin || baseMax <= u_flameBaseMaxRgb;
-            if (!isFlameLike) {
+            vec3 p = fsInput.attributes.positionMC;
+            vec3 eps = vec3(u_bbInflate);
+            vec3 bmin = u_flameBbMin - eps;
+            vec3 bmax = u_flameBbMax + eps;
+            if (any(lessThan(p, bmin)) || any(greaterThan(p, bmax))) {
               return;
             }
 
@@ -364,11 +356,9 @@
         });
       }
 
+      wireRange("bbInflateRange", "u_bbInflate", (v) => v.toFixed(2));
       wireRange("uvScaleXRange", "u_uvScale", (v) => v.toFixed(2));
       wireRange("uvScaleYRange", "u_uvScale", (v) => v.toFixed(2));
-
-      wireRange("emMinRange", "u_flameEmissiveMin", (v) => v.toFixed(2));
-      wireRange("baseMaxRange", "u_flameBaseMaxRgb", (v) => v.toFixed(2));
       wireRange("intensityRange", "u_intensity", (v) => v.toFixed(2));
       wireRange("turbRange", "u_turbulenceAmount", (v) => v.toFixed(2));
       wireRange("ringCountRange", "u_ringCount", (v) => v.toFixed(1));
@@ -380,10 +370,9 @@
       });
 
       for (const id of [
+        "bbInflateRange",
         "uvScaleXRange",
         "uvScaleYRange",
-        "emMinRange",
-        "baseMaxRange",
         "intensityRange",
         "turbRange",
         "ringCountRange",
@@ -424,7 +413,7 @@
       });
 
       try {
-        const dataSource = await Cesium.CzmlDataSource.load("./rocket.czml");
+        const dataSource = await Cesium.CzmlDataSource.load("./simpleRocket.czml");
         await viewer.dataSources.add(dataSource);
 
         viewer.clockTrackedDataSource = dataSource;
@@ -434,6 +423,33 @@
         }
 
         const rocket = dataSource.entities.getById("LaunchVehicle/LaunchVehicle1");
+
+        function refreshFlamePlaneStatus() {
+          let nodeMsg = " (检测 flamePlane 节点...)";
+          try {
+            for (let i = 0; i < viewer.scene.primitives.length; i++) {
+              const p = viewer.scene.primitives.get(i);
+              if (
+                p instanceof Cesium.Model &&
+                p.ready &&
+                rocket &&
+                p.id &&
+                (p.id === rocket || (rocket && p.id.id === rocket.id))
+              ) {
+                const n = p.getNode("flamePlane");
+                nodeMsg = n
+                  ? " 已检测到 glTF 节点 flamePlane。"
+                  : " 未检测到节点 flamePlane, 请核对 glb。";
+                break;
+              }
+            }
+          } catch (_) {
+            nodeMsg = "";
+          }
+          status.textContent =
+            "simpleRocket.czml 已加载, 尾焰仅作用于 positionMC 包围盒内 (对应 flamePlane 片元)。" + nodeMsg;
+        }
+
         if (rocket && rocket.model) {
           rocket.model.incrementallyLoadTextures = new Cesium.ConstantProperty(false);
           rocket.model.customShader = new Cesium.ConstantProperty(flameCustomShader);
@@ -442,6 +458,7 @@
           function tryAttachPrimitiveShader() {
             if (attachCustomShaderToEntityModel(rocket, flameCustomShader)) {
               viewer.scene.postUpdate.removeEventListener(tryAttachPrimitiveShader);
+              refreshFlamePlaneStatus();
             }
           }
           viewer.scene.postUpdate.addEventListener(tryAttachPrimitiveShader);
@@ -449,18 +466,19 @@
         }
 
         await viewer.zoomTo(dataSource);
-        status.textContent =
-          "rocket.czml 已加载, CustomShader 已绑定 (暗色底板 / emissive 识别火焰片, Model ready 时同步 Primitive)。";
+        refreshFlamePlaneStatus();
 
-        window.rocketFlameMesh = {
+        window.rocketFlameMesh3 = {
           viewer,
           flameCustomShader,
           rocket,
           attachCustomShaderToEntityModel,
+          FLAME_PLANE_BB_MIN,
+          FLAME_PLANE_BB_MAX,
         };
       } catch (error) {
-        console.error("Failed to load rocket.czml", error);
-        status.textContent = "rocket.czml 加载失败, 请从项目根目录启动静态服务器。";
+        console.error("Failed to load simpleRocket.czml", error);
+        status.textContent = "simpleRocket.czml 加载失败, 请从项目根目录启动静态服务器。";
         status.classList.add("error");
       }
     </script>
