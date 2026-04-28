@@ -1,0 +1,468 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Cesium Rocket Flame Shader (GLB Mesh)</title>
+    <script src="https://cesium.com/downloads/cesiumjs/releases/1.138/Build/Cesium/Cesium.js"></script>
+    <link
+      href="https://cesium.com/downloads/cesiumjs/releases/1.138/Build/Cesium/Widgets/widgets.css"
+      rel="stylesheet"
+    />
+    <style>
+      html,
+      body,
+      #cesiumContainer {
+        width: 100%;
+        height: 100%;
+        margin: 0;
+        padding: 0;
+        overflow: hidden;
+      }
+
+      body {
+        font-family:
+          "Microsoft YaHei",
+          "PingFang SC",
+          "Noto Sans CJK SC",
+          sans-serif;
+      }
+
+      .panel {
+        position: absolute;
+        top: 16px;
+        left: 16px;
+        z-index: 10;
+        max-width: 400px;
+        padding: 14px 16px;
+        border: 1px solid rgba(255, 255, 255, 0.18);
+        border-radius: 12px;
+        color: #ffffff;
+        background: rgba(15, 22, 32, 0.78);
+        box-shadow: 0 12px 36px rgba(0, 0, 0, 0.28);
+        backdrop-filter: blur(8px);
+      }
+
+      .panel h1 {
+        margin: 0 0 8px;
+        font-size: 17px;
+      }
+
+      .panel p {
+        margin: 0;
+        color: rgba(255, 255, 255, 0.78);
+        font-size: 13px;
+        line-height: 1.6;
+      }
+
+      .panel .controls {
+        margin-top: 10px;
+        display: grid;
+        grid-template-columns: minmax(0, 1.15fr) minmax(72px, 1fr) auto;
+        gap: 8px 10px;
+        align-items: center;
+        font-size: 12px;
+      }
+
+      .panel .controls label {
+        color: rgba(255, 255, 255, 0.85);
+        line-height: 1.35;
+        min-width: 0;
+      }
+
+      .panel .controls input[type="range"] {
+        width: 100%;
+        min-width: 0;
+      }
+
+      .panel .controls .value {
+        color: #7fffd4;
+        font-family: Consolas, "Courier New", monospace;
+        min-width: 3.25rem;
+        text-align: right;
+        justify-self: end;
+      }
+
+      .panel .controls .control-full {
+        grid-column: 1 / -1;
+      }
+
+      .panel .controls .flip-row {
+        display: flex;
+        align-items: flex-start;
+        gap: 8px;
+        margin-top: 2px;
+      }
+
+      .panel .controls .flip-row label {
+        margin: 0;
+        font-size: 12px;
+      }
+
+      .status {
+        margin-top: 10px;
+        color: #7fffd4;
+        font-family: Consolas, "Courier New", monospace;
+        font-size: 12px;
+      }
+
+      .status.error {
+        color: #ff9a9a;
+      }
+    </style>
+  </head>
+  <body>
+    <div id="cesiumContainer"></div>
+    <aside class="panel" aria-live="polite">
+      <h1>Rocket 尾焰 (模型内 Mesh)</h1>
+      <p>
+        使用 <code>ModelGraphics.customShader</code> 将 <code>Cesium.CustomShader</code> 挂到 CZML
+        实体模型上。<code>CustomShader</code> 不写 <code>lightingModel</code>、并用
+        <code>translucencyMode: INHERIT</code>, 避免整箭被当成 UNLIT/全透明而破坏本体 PBR。
+        火焰片识别: <code>length(emissive)</code> 超过阈值, 或底板
+        <code>max(baseColor.r,g,b)</code> 低于阈值 (适配 <code>Flames</code> 的暗色 baseColor 贴图,
+        不能再用 <code>length(rgb)</code>)。模型 <code>ready</code> 后会对 Primitive 再挂一次 shader。
+      </p>
+
+      <div class="controls">
+        <label for="uvScaleXRange">UV 横向缩放 (半径感)</label>
+        <input id="uvScaleXRange" type="range" min="0.35" max="2.5" step="0.05" value="1" />
+        <span class="value" id="uvScaleXValue">1.00</span>
+
+        <label for="uvScaleYRange">UV 轴向缩放 (长度感)</label>
+        <input id="uvScaleYRange" type="range" min="0.35" max="2.5" step="0.05" value="1" />
+        <span class="value" id="uvScaleYValue">1.00</span>
+
+        <label for="emMinRange">emissive 长度阈值</label>
+        <input id="emMinRange" type="range" min="0.02" max="0.8" step="0.02" value="0.06" />
+        <span class="value" id="emMinValue">0.06</span>
+
+        <label for="baseMaxRange">底板 max(R,G,B) 阈值 (低于视为火焰片)</label>
+        <input id="baseMaxRange" type="range" min="0.05" max="0.45" step="0.01" value="0.22" />
+        <span class="value" id="baseMaxValue">0.22</span>
+
+        <label for="intensityRange">强度</label>
+        <input id="intensityRange" type="range" min="0.4" max="2.2" step="0.05" value="1.35" />
+        <span class="value" id="intensityValue">1.35</span>
+
+        <label for="turbRange">湍流</label>
+        <input id="turbRange" type="range" min="0" max="2.5" step="0.05" value="1.4" />
+        <span class="value" id="turbValue">1.40</span>
+
+        <label for="ringCountRange">马赫环数量</label>
+        <input id="ringCountRange" type="range" min="0" max="5" step="0.5" value="2" />
+        <span class="value" id="ringCountValue">2.0</span>
+
+        <label for="ringContrastRange">马赫环对比</label>
+        <input id="ringContrastRange" type="range" min="0" max="1.2" step="0.05" value="0.4" />
+        <span class="value" id="ringContrastValue">0.40</span>
+
+        <label for="emBoostRange">自发光倍增 (PBR 下建议偏大)</label>
+        <input id="emBoostRange" type="range" min="1" max="12" step="0.5" value="4" />
+        <span class="value" id="emBoostValue">4.0</span>
+
+        <div class="control-full flip-row">
+          <input type="checkbox" id="flipAlongCheck" />
+          <label for="flipAlongCheck">反转 UV-Y (仍看不见时勾选, 喷口可能在纹理 v=1 侧)</label>
+        </div>
+      </div>
+
+      <div id="status" class="status">正在加载 rocket.czml...</div>
+    </aside>
+
+    <script type="module">
+      Cesium.Ion.defaultAccessToken =
+        "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJqdGkiOiI4M2ZhYzM4My1lN2NhLTRjNTktODY1OC1jZDdmOTU3Y2ZjMGEiLCJpZCI6MTMwNTAsInNjb3BlcyI6WyJhc3IiLCJnYyJdLCJpYXQiOjE1NjI0NzA5NzB9.rRTs6chsWJdo9KNYe5VjJj2fUzMHeniIJvFQOd0aLJU";
+
+      const status = document.getElementById("status");
+
+      const viewer = new Cesium.Viewer("cesiumContainer", {
+        terrain: Cesium.Terrain.fromWorldTerrain(),
+        animation: true,
+        timeline: true,
+        shouldAnimate: true,
+        orderIndependentTranslucency: false,
+      });
+
+      viewer.scene.globe.depthTestAgainstTerrain = true;
+      viewer.scene.globe.enableLighting = true;
+      viewer.scene.highDynamicRange = true;
+      viewer.useBrowserRecommendedResolution = false;
+
+      function colorToVec4(c) {
+        return new Cesium.Cartesian4(c.red, c.green, c.blue, c.alpha);
+      }
+
+      const flameUniforms = {
+        u_time: { type: Cesium.UniformType.FLOAT, value: 0.0 },
+        u_uvScale: { type: Cesium.UniformType.VEC2, value: new Cesium.Cartesian2(1.0, 1.0) },
+        u_flameEmissiveMin: { type: Cesium.UniformType.FLOAT, value: 0.06 },
+        u_flameBaseMaxRgb: {
+          type: Cesium.UniformType.FLOAT,
+          value: 0.22,
+        },
+        u_coreColor: {
+          type: Cesium.UniformType.VEC4,
+          value: colorToVec4(Cesium.Color.fromCssColorString("#ffe6a8")),
+        },
+        u_flameColor: {
+          type: Cesium.UniformType.VEC4,
+          value: colorToVec4(Cesium.Color.fromCssColorString("#ff6a22")),
+        },
+        u_smokeColor: {
+          type: Cesium.UniformType.VEC4,
+          value: colorToVec4(Cesium.Color.fromCssColorString("#dba090")),
+        },
+        u_farSmokeColor: {
+          type: Cesium.UniformType.VEC4,
+          value: colorToVec4(Cesium.Color.fromCssColorString("#9c8d86")),
+        },
+        u_intensity: { type: Cesium.UniformType.FLOAT, value: 1.35 },
+        u_turbulenceAmount: { type: Cesium.UniformType.FLOAT, value: 1.4 },
+        u_ringCount: { type: Cesium.UniformType.FLOAT, value: 2.0 },
+        u_ringContrast: { type: Cesium.UniformType.FLOAT, value: 0.4 },
+        u_flameEmissiveBoost: { type: Cesium.UniformType.FLOAT, value: 4.0 },
+        u_flipAlong: { type: Cesium.UniformType.FLOAT, value: 0.0 },
+      };
+
+      const flameCustomShader = new Cesium.CustomShader({
+        mode: Cesium.CustomShaderMode.MODIFY_MATERIAL,
+        translucencyMode: Cesium.CustomShaderTranslucencyMode.INHERIT,
+        uniforms: flameUniforms,
+        varyings: {
+          v_flameUv: Cesium.VaryingType.VEC2,
+        },
+        vertexShaderText: `
+          void vertexMain(VertexInput vsInput, inout czm_modelVertexOutput vsOutput) {
+            v_flameUv = vsInput.attributes.texCoord_0 * u_uvScale;
+          }
+        `,
+        fragmentShaderText: `
+          float hash(vec2 p) {
+            return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453123);
+          }
+
+          float noise(vec2 p) {
+            vec2 i = floor(p);
+            vec2 f = fract(p);
+            vec2 u = f * f * (3.0 - 2.0 * f);
+            return mix(
+              mix(hash(i + vec2(0.0, 0.0)), hash(i + vec2(1.0, 0.0)), u.x),
+              mix(hash(i + vec2(0.0, 1.0)), hash(i + vec2(1.0, 1.0)), u.x),
+              u.y
+            );
+          }
+
+          float fbm(vec2 p) {
+            float value = 0.0;
+            float amplitude = 0.5;
+            for (int i = 0; i < 5; i++) {
+              value += amplitude * noise(p);
+              p *= 2.05;
+              amplitude *= 0.5;
+            }
+            return value;
+          }
+
+          float fadeOut(float edge0, float edge1, float x) {
+            return 1.0 - smoothstep(edge0, edge1, x);
+          }
+
+          void fragmentMain(FragmentInput fsInput, inout czm_modelMaterial material) {
+            float emLen = length(material.emissive);
+            float baseMax = max(
+              max(material.baseColor.r, material.baseColor.g),
+              material.baseColor.b
+            );
+            bool isFlameLike =
+              emLen >= u_flameEmissiveMin || baseMax <= u_flameBaseMaxRgb;
+            if (!isFlameLike) {
+              return;
+            }
+
+            float tv = clamp(v_flameUv.y, 0.0, 1.0);
+            float along = mix(tv, 1.0 - tv, step(0.5, u_flipAlong));
+            float lateral = v_flameUv.x - 0.5;
+
+            float spread = 0.38 + along * (0.50 + u_turbulenceAmount * 0.20);
+            float turb = fbm(vec2(lateral * 7.0, along * 4.0 - u_time * 5.5));
+            float turb2 = fbm(vec2(lateral * 3.0 + 17.3, along * 1.8 - u_time * 2.2));
+            float turb3 = fbm(vec2(lateral * 11.0 - 5.0, along * 7.0 - u_time * 3.5));
+
+            float wobble = (turb - 0.5) * 0.40 * u_turbulenceAmount * smoothstep(0.0, 0.55, along);
+            float dist = abs(lateral / spread + wobble) * 2.0;
+
+            float ringZone = clamp((along - 0.08) / 0.40, 0.0, 1.0);
+            float ringPhase = ringZone * u_ringCount * 6.2831853 + sin(lateral * 11.0 + 7.3) * 0.45;
+            float rings = smoothstep(0.72, 0.96, sin(ringPhase));
+            float ringMask = fadeOut(0.42, 0.55, along) * smoothstep(0.08, 0.16, along);
+            ringMask *= smoothstep(0.0, 0.5, u_ringCount);
+
+            float core = fadeOut(0.0, 0.55, dist) * fadeOut(0.0, 0.32, along);
+            float flame = fadeOut(0.05, 1.0, dist)
+              * fadeOut(0.02, 0.65, along)
+              * (1.0 + turb2 * 0.25 * u_turbulenceAmount);
+            float plumeDist = dist - turb3 * 0.45 * u_turbulenceAmount * smoothstep(0.20, 0.75, along);
+            float plume = fadeOut(0.05, 1.0, plumeDist)
+              * smoothstep(0.32, 0.55, along)
+              * fadeOut(0.72, 1.0, along)
+              * (0.55 + turb * 0.6 * u_turbulenceAmount);
+
+            float farFade = mix(1.0, 0.25, smoothstep(0.86, 1.0, along));
+            vec3 smokeAt = mix(u_smokeColor.rgb, u_farSmokeColor.rgb, smoothstep(0.30, 0.85, along));
+            vec3 col = smokeAt;
+            col = mix(col, u_flameColor.rgb, clamp(flame, 0.0, 1.0));
+            col = mix(col, u_coreColor.rgb, clamp(core, 0.0, 1.0));
+
+            float ringRadialMask = fadeOut(0.18, 0.62, dist);
+            float ringBoost = rings * ringMask * ringRadialMask * u_ringContrast;
+            col = mix(col, u_coreColor.rgb, ringBoost * 0.45);
+
+            float alpha = 0.0;
+            alpha = max(alpha, core * 1.50);
+            alpha = max(alpha, flame * 1.15);
+            alpha = max(alpha, plume * 0.22);
+            alpha *= 1.0 + ringBoost * 0.35;
+            alpha *= farFade * u_intensity;
+            alpha = max(alpha, 0.07 * u_intensity);
+            alpha = clamp(alpha, 0.0, 1.0);
+
+            if (alpha < 0.004) {
+              discard;
+            }
+
+            material.diffuse = vec3(0.0);
+            material.emissive =
+              col *
+              (0.85 + 2.8 * alpha + ringBoost * 0.9) *
+              u_flameEmissiveBoost;
+            material.alpha = alpha;
+            material.specular = vec3(0.0);
+            material.roughness = 1.0;
+          }
+        `,
+      });
+
+      function wireRange(id, uniformName, formatter) {
+        const input = document.getElementById(id);
+        const out = document.getElementById(id.replace("Range", "Value"));
+        const apply = () => {
+          const v = Number(input.value);
+          out.textContent = formatter(v);
+          return v;
+        };
+        apply();
+        input.addEventListener("input", () => {
+          const v = apply();
+          if (uniformName === "u_uvScale") {
+            const x = Number(document.getElementById("uvScaleXRange").value);
+            const y = Number(document.getElementById("uvScaleYRange").value);
+            flameCustomShader.setUniform("u_uvScale", new Cesium.Cartesian2(x, y));
+          } else {
+            flameCustomShader.setUniform(uniformName, v);
+          }
+        });
+      }
+
+      wireRange("uvScaleXRange", "u_uvScale", (v) => v.toFixed(2));
+      wireRange("uvScaleYRange", "u_uvScale", (v) => v.toFixed(2));
+
+      wireRange("emMinRange", "u_flameEmissiveMin", (v) => v.toFixed(2));
+      wireRange("baseMaxRange", "u_flameBaseMaxRgb", (v) => v.toFixed(2));
+      wireRange("intensityRange", "u_intensity", (v) => v.toFixed(2));
+      wireRange("turbRange", "u_turbulenceAmount", (v) => v.toFixed(2));
+      wireRange("ringCountRange", "u_ringCount", (v) => v.toFixed(1));
+      wireRange("ringContrastRange", "u_ringContrast", (v) => v.toFixed(2));
+      wireRange("emBoostRange", "u_flameEmissiveBoost", (v) => v.toFixed(1));
+
+      document.getElementById("flipAlongCheck").addEventListener("change", (e) => {
+        flameCustomShader.setUniform("u_flipAlong", e.target.checked ? 1.0 : 0.0);
+      });
+
+      for (const id of [
+        "uvScaleXRange",
+        "uvScaleYRange",
+        "emMinRange",
+        "baseMaxRange",
+        "intensityRange",
+        "turbRange",
+        "ringCountRange",
+        "ringContrastRange",
+        "emBoostRange",
+      ]) {
+        document.getElementById(id).dispatchEvent(new Event("input"));
+      }
+
+      function attachCustomShaderToEntityModel(entity, shader) {
+        const wantId = entity.id;
+        for (let i = 0; i < viewer.scene.primitives.length; i++) {
+          const p = viewer.scene.primitives.get(i);
+          const sameEntity =
+            p instanceof Cesium.Model &&
+            p.id &&
+            (p.id === entity || p.id.id === wantId);
+          if (sameEntity) {
+            const apply = () => {
+              p.customShader = shader;
+            };
+            if (p.ready) {
+              apply();
+            } else {
+              p.readyEvent.addEventListener(apply);
+            }
+            return true;
+          }
+        }
+        return false;
+      }
+
+      viewer.scene.postUpdate.addEventListener((scene, time) => {
+        flameCustomShader.setUniform(
+          "u_time",
+          Cesium.JulianDate.secondsDifference(time, viewer.clock.startTime),
+        );
+      });
+
+      try {
+        const dataSource = await Cesium.CzmlDataSource.load("./rocket.czml");
+        await viewer.dataSources.add(dataSource);
+
+        viewer.clockTrackedDataSource = dataSource;
+
+        if (dataSource.clock) {
+          viewer.timeline.zoomTo(dataSource.clock.startTime, dataSource.clock.stopTime);
+        }
+
+        const rocket = dataSource.entities.getById("LaunchVehicle/LaunchVehicle1");
+        if (rocket && rocket.model) {
+          rocket.model.incrementallyLoadTextures = new Cesium.ConstantProperty(false);
+          rocket.model.customShader = new Cesium.ConstantProperty(flameCustomShader);
+          viewer.trackedEntity = rocket;
+
+          function tryAttachPrimitiveShader() {
+            if (attachCustomShaderToEntityModel(rocket, flameCustomShader)) {
+              viewer.scene.postUpdate.removeEventListener(tryAttachPrimitiveShader);
+            }
+          }
+          viewer.scene.postUpdate.addEventListener(tryAttachPrimitiveShader);
+          tryAttachPrimitiveShader();
+        }
+
+        await viewer.zoomTo(dataSource);
+        status.textContent =
+          "rocket.czml 已加载, CustomShader 已绑定 (暗色底板 / emissive 识别火焰片, Model ready 时同步 Primitive)。";
+
+        window.rocketFlameMesh = {
+          viewer,
+          flameCustomShader,
+          rocket,
+          attachCustomShaderToEntityModel,
+        };
+      } catch (error) {
+        console.error("Failed to load rocket.czml", error);
+        status.textContent = "rocket.czml 加载失败, 请从项目根目录启动静态服务器。";
+        status.classList.add("error");
+      }
+    </script>
+  </body>
+</html>
