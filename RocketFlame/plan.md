@@ -49,20 +49,20 @@ http://localhost:8000/RocketFlame/rocketFlame.html
 ### 关键点
 
 1. 几何体: 使用两张互相垂直的 `PlaneGeometry` 组成 cross-plane Primitive。
-   `reference.tsx` 的 shader 依赖平面 UV, 所以 Cesium 侧需要让 `st.s` 表示横向,
+  `reference.tsx` 的 shader 依赖平面 UV, 所以 Cesium 侧需要让 `st.s` 表示横向,
    `st.t` 表示喷射轴向, 而不是使用 `CylinderGeometry` 的周向 `s`。
 2. 材质: `new Cesium.Material({ fabric: { uniforms: { time, coreColor, flameColor, smokeColor, farSmokeColor, intensity, turbulenceAmount, ringCount, ringContrast }, source } })`。
-   shader 参考 `reference.tsx` 的 2D fbm 尾焰逻辑, 用沿轴向滚动的湍流生成高温核心, 橙色火焰和远端烟羽。
+  shader 参考 `reference.tsx` 的 2D fbm 尾焰逻辑, 用沿轴向滚动的湍流生成高温核心, 橙色火焰和远端烟羽。
    同时加入静态马赫环: `ringCount` 控制亮盘数量, `ringContrast` 控制亮盘强度。
    颜色由远端烟雾过渡到橙色火焰, 再到白黄色核心。
    `czm_materialInput.st` 来自 `PlaneGeometry` 的 UV: `s` 是横向, `t` 是轴向 (0=喷口, 1=尖端)。
 3. 外观: `MaterialAppearance({ materialSupport: TEXTURED, material, translucent: true, closed: false })`。
-   需要 `TEXTURED.vertexFormat`, 因为 Cesium 1.138 的 `MaterialSupport.BASIC.vertexFormat`
+  需要 `TEXTURED.vertexFormat`, 因为 Cesium 1.138 的 `MaterialSupport.BASIC.vertexFormat`
    不包含 `st`, 会导致 shader 中 `materialInput.st` 没有真实 UV。
    渲染状态使用 additive blending, `depthMask=false`, `cull=false`, 并关闭尾焰自身 `depthTest`,
    让透明发光烟焰不被发射台地形或火箭模型深度遮掉。
 4. 位姿同步: 通过 `updateFlameTransform(time)` 读取 `rocket.position.getValue(time)` /
-   `rocket.orientation.getValue(time)`, 用 `Matrix4.fromRotationTranslation` 拼出
+  `rocket.orientation.getValue(time)`, 用 `Matrix4.fromRotationTranslation` 拼出
    火箭世界变换 W; 再左乘一个 "本体坐标系内, 把 cross-plane 从 +Z 方向旋到火箭尾喷方向, 并平移到尾部" 的局部矩阵 L,
    写入 `flamePrimitive.modelMatrix = W * L`, 同时把 `clock` 的相对秒数写入 `material.uniforms.time`。
    `scene.preUpdate` 和页面暴露的调试接口共用同一个函数, 便于把时钟暂停到指定 CZML 时间后稳定验证尾焰贴合位置。
@@ -96,7 +96,7 @@ http://localhost:8000/RocketFlame/rocketFlameShader.html
 
 ### 如何只改火焰片
 
-Cesium 的 `CustomShader` 作用于整颗 Model, 因此在 `fragmentMain` 里对非火焰材质直接 `return`, 保留 glTF 原有 PBR 结果。本仓库 glb 中火焰相关 mesh 共用材质 `Flames` (`emissiveFactor` 高, `alphaMode: BLEND`, 暗色 `baseColorTexture`)。片段阶段用 `length(emissive)` 阈值, 并辅以 **`max(baseColor.r,g,b)`** 低于阈值判定暗底板 (勿用 `length(rgb)`)。`Model.ready` 后再对 `Model` Primitive 赋一次 `customShader`, 并用 `entity.id` 字符串匹配避免因引用不同挂载失败。
+Cesium 的 `CustomShader` 作用于整颗 Model, 因此在 `fragmentMain` 里对非火焰材质直接 `return`, 保留 glTF 原有 PBR 结果。本仓库 glb 中火焰相关 mesh 共用材质 `Flames` (`emissiveFactor` 高, `alphaMode: BLEND`, 暗色 `baseColorTexture`)。片段阶段用 `length(emissive)` 阈值, 并辅以 `**max(baseColor.r,g,b)**` 低于阈值判定暗底板 (勿用 `length(rgb)`)。`Model.ready` 后再对 `Model` Primitive 赋一次 `customShader`, 并用 `entity.id` 字符串匹配避免因引用不同挂载失败。
 
 **重要**: 不要在 `CustomShader` 上设置 `lightingModel: UNLIT`, 否则会覆盖整箭光照。`translucencyMode` 应使用 `INHERIT`。面板侧可加大自发光倍增、软化尖端 `farFade`、勾选反转 UV-Y 以适配喷口在纹理 v 轴哪一侧。
 
@@ -118,3 +118,15 @@ http://localhost:8000/RocketFlame/rocketFlameShader2.html
 - `Model.ready` 后从 `getNode("flamePlane")._runtimeNode.runtimePrimitives` 读取各 primitive 的 `boundingSphere`（与 `positionMC` 同属 mesh 局部空间），包成 AABB 写入 uniform；失败时回退页面默认 `FLAME_PLANE_BB_*`。
 - 顶点阶段在裁切盒内做法向脉动（随 `u_time` / `normalMC`），片元叠加 `flicker`，与原有 fbm + 马赫环形成动态尾焰。
 - 验证：`http://localhost:8000/RocketFlame/rocketFlameShader3.html`
+
+## 自定义顶点属性 `_DDD`（Blender → glTF → CustomShader）
+
+完整流程（Blender 中为 flamePlane 写入 `_DDD`、导出设置、glTF 校验、Cesium 中 `ddd` 映射与 fragment 分支注意事项）见：
+
+`**[RocketFlame/flamePlane-DDD-workflow.md](flamePlane-DDD-workflow.md)`**
+
+摘要：
+
+- glTF 属性名 `_DDD` → CustomShader 中为 `**float**` 类型的 `**vsInput.attributes.ddd` / `fsInput.attributes.ddd**`。
+- 仅火焰 primitive 含 `_DDD` 时：火焰可走分支；**无该属性的 primitive 可能不会执行自定义片段中的 `else`**，箭身保持原材质——应对火焰分支改写、`<= 阈值` 时 `**return**`，或在 Blender 中为箭身顶点同样写入 `_DDD=0`。
+

@@ -57,18 +57,18 @@
         mode: Cesium.CustomShaderMode.MODIFY_MATERIAL,
         translucencyMode: Cesium.CustomShaderTranslucencyMode.INHERIT,
         vertexShaderText: `
-          void vertexMain(VertexInput vsInput, inout czm_modelVertexOutput vsOutput) {}
+          void vertexMain(VertexInput vsInput, inout czm_modelVertexOutput vsOutput) {
+            float tag = vsInput.attributes.ddd; 
+          }
         `,
         fragmentShaderText: `
           void fragmentMain(FragmentInput fsInput, inout czm_modelMaterial material) {
-           float mask = fsInput.attributes.color_0.r;
-            //  这里是火焰的mesh 
-            if (mask < 0.3) {
-              material.diffuse = vec3(0.0, 0.0, 1.0);
-              
-            } else {
-              material.diffuse = vec3(0.0, 1.0, 0.0);
-            }            
+         
+           float flameTag = fsInput.attributes.ddd;
+           if(flameTag>0.5){
+            material.diffuse = vec3(1.0, 0.0, 0.0);
+           }
+           
             material.emissive = vec3(0.0);
             material.alpha = 1.0;
             material.specular = vec3(0.0);
