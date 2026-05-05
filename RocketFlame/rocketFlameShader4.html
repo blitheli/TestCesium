@@ -3,7 +3,7 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>Cesium Rocket Flame Shader (flamePlane, 纯色)</title>
+    <title>Cesium Rocket Flame Shader (flamePlane + _DDD, fbm 尾焰)</title>
     <script src="https://cesium.com/downloads/cesiumjs/releases/1.138/Build/Cesium/Cesium.js"></script>
     <link
       href="https://cesium.com/downloads/cesiumjs/releases/1.138/Build/Cesium/Widgets/widgets.css"
@@ -40,7 +40,7 @@
         terrain: Cesium.Terrain.fromWorldTerrain(),
         animation: true,
         timeline: true,
-        shouldAnimate: false,
+        shouldAnimate: true,
         orderIndependentTranslucency: false,
       });
 
@@ -51,30 +51,156 @@
 
       const FLAME_PLANE_BB_MIN = new Cesium.Cartesian3(-1.0, -1.0, -20.0);
       const FLAME_PLANE_BB_MAX = new Cesium.Cartesian3(1.0, 1.0, -20.0);
-      const FLAME_BB_INFLATE = 3.0;
 
+      function colorToVec4(c) {
+        return new Cesium.Cartesian4(c.red, c.green, c.blue, c.alpha);
+      }
+
+      const flameUniforms = {
+        u_time: { type: Cesium.UniformType.FLOAT, value: 0.0 },
+        u_coreColor: {
+          type: Cesium.UniformType.VEC4,
+          value: colorToVec4(Cesium.Color.fromCssColorString("#ffe6a8")),
+        },
+        u_flameColor: {
+          type: Cesium.UniformType.VEC4,
+          value: colorToVec4(Cesium.Color.fromCssColorString("#ff6a22")),
+        },
+        u_smokeColor: {
+          type: Cesium.UniformType.VEC4,
+          value: colorToVec4(Cesium.Color.fromCssColorString("#dba090")),
+        },
+        u_farSmokeColor: {
+          type: Cesium.UniformType.VEC4,
+          value: colorToVec4(Cesium.Color.fromCssColorString("#9c8d86")),
+        },
+        u_intensity: { type: Cesium.UniformType.FLOAT, value: 1.35 },
+        u_turbulenceAmount: { type: Cesium.UniformType.FLOAT, value: 1.4 },
+        u_ringCount: { type: Cesium.UniformType.FLOAT, value: 2.0 },
+        u_ringContrast: { type: Cesium.UniformType.FLOAT, value: 0.4 },
+      };
+
+      // 将 _DDD(->ddd) 与 UV 经 varying 传入片元，避免在 fragment 中读 fsInput.attributes.ddd
+      // 触发部分环境下 CustomShader 拼接后 customShaderStage 重载/编译失败。
       const flameCustomShader = new Cesium.CustomShader({
         mode: Cesium.CustomShaderMode.MODIFY_MATERIAL,
         translucencyMode: Cesium.CustomShaderTranslucencyMode.INHERIT,
+        uniforms: flameUniforms,
+        varyings: {
+          v_flameUv: Cesium.VaryingType.VEC2,
+          v_flameTag: Cesium.VaryingType.FLOAT,
+        },
         vertexShaderText: `
           void vertexMain(VertexInput vsInput, inout czm_modelVertexOutput vsOutput) {
-            float tag = vsInput.attributes.ddd; 
+            v_flameUv = vsInput.attributes.texCoord_0;
+            v_flameTag = vsInput.attributes.ddd;
           }
         `,
         fragmentShaderText: `
+          float rf_hash(vec2 p) {
+            return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453123);
+          }
+
+          float rf_noise(vec2 p) {
+            vec2 i = floor(p);
+            vec2 f = fract(p);
+            vec2 u = f * f * (3.0 - 2.0 * f);
+            return mix(
+              mix(rf_hash(i + vec2(0.0, 0.0)), rf_hash(i + vec2(1.0, 0.0)), u.x),
+              mix(rf_hash(i + vec2(0.0, 1.0)), rf_hash(i + vec2(1.0, 1.0)), u.x),
+              u.y
+            );
+          }
+
+          float rf_fbm(vec2 p) {
+            float value = 0.0;
+            float amplitude = 0.5;
+            for (int i = 0; i < 5; i++) {
+              value += amplitude * rf_noise(p);
+              p *= 2.05;
+              amplitude *= 0.5;
+            }
+            return value;
+          }
+
+          float rf_fade(float edge0, float edge1, float x) {
+            return 1.0 - smoothstep(edge0, edge1, x);
+          }
+
           void fragmentMain(FragmentInput fsInput, inout czm_modelMaterial material) {
-         
-           float flameTag = fsInput.attributes.ddd;
-           if(flameTag>0.5){
-            material.diffuse = vec3(1.0, 0.0, 0.0);
-           }
-           
-            material.emissive = vec3(0.0);
-            material.alpha = 1.0;
+            if (v_flameTag <= 0.5) {
+              return;
+            }
+
+            vec2 uv = v_flameUv;
+            float along = clamp(uv.y, 0.0, 1.0);
+            float lateral = uv.x - 0.5;
+
+            float spread = 0.38 + along * (0.50 + u_turbulenceAmount * 0.20);
+            float turb = rf_fbm(vec2(lateral * 7.0, along * 4.0 - u_time * 5.5));
+            float turb2 = rf_fbm(vec2(lateral * 3.0 + 17.3, along * 1.8 - u_time * 2.2));
+            float turb3 = rf_fbm(vec2(lateral * 11.0 - 5.0, along * 7.0 - u_time * 3.5));
+
+            float wobble = (turb - 0.5) * 0.40 * u_turbulenceAmount * smoothstep(0.0, 0.55, along);
+            float dist = abs(lateral / spread + wobble) * 2.0;
+
+            float ringZone = clamp((along - 0.08) / 0.40, 0.0, 1.0);
+            float ringPhase = ringZone * u_ringCount * 6.2831853 + sin(lateral * 11.0 + 7.3) * 0.45;
+            float rings = smoothstep(0.72, 0.96, sin(ringPhase));
+            float ringMask = rf_fade(0.42, 0.55, along) * smoothstep(0.08, 0.16, along);
+            ringMask *= smoothstep(0.0, 0.5, u_ringCount);
+
+            float core = rf_fade(0.0, 0.55, dist) * rf_fade(0.0, 0.32, along);
+            float flameMat = rf_fade(0.05, 1.0, dist)
+              * rf_fade(0.02, 0.65, along)
+              * (1.0 + turb2 * 0.25 * u_turbulenceAmount);
+            float plumeDist = dist - turb3 * 0.45 * u_turbulenceAmount * smoothstep(0.20, 0.75, along);
+            float plume = rf_fade(0.05, 1.0, plumeDist)
+              * smoothstep(0.32, 0.55, along)
+              * rf_fade(0.72, 1.0, along)
+              * (0.55 + turb * 0.6 * u_turbulenceAmount);
+
+            float farFade = 1.0 - smoothstep(0.78, 1.0, along);
+            vec3 smokeAt = mix(u_smokeColor.rgb, u_farSmokeColor.rgb, smoothstep(0.30, 0.85, along));
+            vec3 col = smokeAt;
+            col = mix(col, u_flameColor.rgb, clamp(flameMat, 0.0, 1.0));
+            col = mix(col, u_coreColor.rgb, clamp(core, 0.0, 1.0));
+
+            float ringRadialMask = rf_fade(0.18, 0.62, dist);
+            float ringBoost = rings * ringMask * ringRadialMask * u_ringContrast;
+            col = mix(col, u_coreColor.rgb, ringBoost * 0.45);
+
+            float alpha = 0.0;
+            alpha = max(alpha, core * 1.50);
+            alpha = max(alpha, flameMat * 1.15);
+            alpha = max(alpha, plume * 0.22);
+            alpha *= 1.0 + ringBoost * 0.35;
+            alpha *= farFade * u_intensity;
+            alpha = clamp(alpha, 0.0, 1.0);
+
+            if (alpha < 0.01) {
+              material.alpha = 0.0;
+              material.diffuse = vec3(0.0);
+              material.emissive = vec3(0.0);
+              material.specular = vec3(0.0);
+              material.roughness = 1.0;
+              return;
+            }
+
+            material.diffuse = vec3(0.0);
+            material.emissive = col * (0.85 + 2.8 * alpha + ringBoost * 0.9);
+            material.alpha = alpha;
             material.specular = vec3(0.0);
             material.roughness = 1.0;
           }
         `,
+      });
+
+      viewer.scene.postUpdate.addEventListener((scene, time) => {
+        flameCustomShader.setUniform(
+          "u_time",
+          Cesium.JulianDate.secondsDifference(time, viewer.clock.startTime),
+        );
       });
 
       function attachCustomShaderToEntityModel(entity, shader) {
