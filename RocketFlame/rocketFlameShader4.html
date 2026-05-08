@@ -181,7 +181,8 @@
             float along = clamp(uv.y, 0.0, 1.0);
             float lateral = uv.x - 0.5;
 
-            float spread = 0.38 + along * (0.50 + u_turbulenceAmount * 0.20);
+            float spread = 0.38 + along * (0.34 + u_turbulenceAmount * 0.14);
+            spread *= 1.0 - 0.30 * smoothstep(0.42, 0.98, along);
             float turb = rf_fbm(vec2(lateral * 7.0, along * 4.0 - u_time * 5.5));
             float turb2 = rf_fbm(vec2(lateral * 3.0 + 17.3, along * 1.8 - u_time * 2.2));
             float turb3 = rf_fbm(vec2(lateral * 11.0 - 5.0, along * 7.0 - u_time * 3.5));
