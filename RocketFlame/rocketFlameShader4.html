@@ -223,17 +223,10 @@
             float ringBoost = rings * ringMask * ringRadialMask * u_ringContrast;
             col = mix(col, u_coreColor.rgb, ringBoost * 0.38);
 
-            float beamSigma = mix(0.018, 0.008, smoothstep(0.0, 1.0, along));
-            float beam = exp(-(lateral * lateral) / (beamSigma * beamSigma + 1e-8));
-            beam *= smoothstep(0.04, 0.14, along) * (1.0 - 0.5 * smoothstep(0.82, 1.0, along));
-            vec3 cyanBeam = vec3(0.22, 0.88, 1.0);
-            col = mix(col, cyanBeam, beam * 0.88);
-
             float alpha = 0.0;
             alpha = max(alpha, core * 1.55);
             alpha = max(alpha, flame * 1.12);
             alpha = max(alpha, plume * 0.20);
-            alpha = max(alpha, beam * 0.62);
             alpha *= 1.0 + ringBoost * 0.28;
             alpha *= farFade * tailThin * u_intensity;
             alpha = clamp(alpha, 0.0, 1.0);
@@ -243,7 +236,7 @@
             }
 
             float emBase = 0.85 + 2.9 * alpha + ringBoost * 0.85;
-            vec3 em = col * emBase + cyanBeam * beam * (2.8 + 1.5 * (1.0 - along));
+            vec3 em = col * emBase;
 
             material.baseColor = vec4(0.0, 0.0, 0.0, 1.0);
             material.diffuse = vec3(0.0);
