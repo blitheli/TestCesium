@@ -206,7 +206,8 @@
               * rf_fade(0.72, 1.0, along)
               * (0.55 + turb * 0.6 * u_turbulenceAmount);
 
-            float farFade = 1.0 - smoothstep(0.78, 1.0, along);
+            float farFade = 1.0 - smoothstep(0.60, 0.995, along);
+            float tailThin = mix(1.0, 0.38, smoothstep(0.40, 0.88, along));
             vec3 smokeAt = mix(u_smokeColor.rgb, u_farSmokeColor.rgb, smoothstep(0.30, 0.85, along));
             vec3 col = smokeAt;
             col = mix(col, u_flameColor.rgb, clamp(flame, 0.0, 1.0));
@@ -221,7 +222,7 @@
             alpha = max(alpha, flame * 1.15);
             alpha = max(alpha, plume * 0.22);
             alpha *= 1.0 + ringBoost * 0.35;
-            alpha *= farFade * u_intensity;
+            alpha *= farFade * tailThin * u_intensity;
             alpha = clamp(alpha, 0.0, 1.0);
 
             if (alpha < 0.01) {
