@@ -130,3 +130,30 @@ http://localhost:8000/RocketFlame/rocketFlameShader2.html
 - glTF 属性名 `_DDD` → CustomShader 中为 `**float**` 类型的 `**vsInput.attributes.ddd` / `fsInput.attributes.ddd**`。
 - 仅火焰 primitive 含 `_DDD` 时：火焰可走分支；**无该属性的 primitive 可能不会执行自定义片段中的 `else`**，箭身保持原材质——应对火焰分支改写、`<= 阈值` 时 `**return**`，或在 Blender 中为箭身顶点同样写入 `_DDD=0`。
 
+## rocketFlameShader4.html 编译错误排查
+
+- 现象：页面打开即报 `RuntimeError: Vertex shader failed to compile. ERROR: 0:257: 'customShaderStage' : no matching overloaded function found`。
+- 复现方式：根目录执行 `python -m http.server 8000` 后访问 `http://127.0.0.1:8000/RocketFlame/rocketFlameShader4.html`。
+- 排查结果：报错并非来自 `fragmentMain` 本身，而是 `rocket.model.customShader = new Cesium.ConstantProperty(flameCustomShader)` 这条 `ModelGraphics.customShader` 路径。在 Cesium 1.138 下，这份资产会生成带 `HAS_CUSTOM_VERTEX_SHADER` 宏、但缺失 `customShaderStage(...)` 定义的顶点管线，最终在主着色器调用处编译失败。
+- 验证证据：浏览器抓到的编译后顶点着色器中只剩 `customShaderStage(vsOutput, attributes, featureIds, metadata, metadataClass, metadataStatistics);` 调用，没有对应函数定义；同时 `ProcessedAttributes` 里仅出现 `positionMC`、`normalMC`、`texCoord_0`、`color_0`。
+- 修复：不再给 `Entity.model.customShader` 赋值，只保留 `attachCustomShaderToEntityModel(...)` 中对底层 `Cesium.Model` primitive 的直接挂载 `p.customShader = shader`。
+- 修复后验证：页面可正常渲染，控制台仅剩 `favicon.ico` 404，与着色器无关。
+
+## rocketFlameShader4.html 单色验证模式
+
+- 当前页新增开关 `USE_SOLID_COLOR_TEST`：
+  - `true` 时，`_DDD > 0.5` 的 flamePlane 直接输出固定橙红色自发光，便于先确认 flamePlane 是否被 shader 命中。
+  - `false` 时，恢复同文件内原有 fbm 尾焰代码。
+- 当前页同时保留 `rocket.model.customShader = new Cesium.ConstantProperty(flameCustomShader)`，用于让当前资产先走最直接的 shader 挂载路径，再观察 flamePlane 是否出现。
+- 本轮验证结果：页面可正常加载，未再出现 `customShaderStage` 编译错误；控制台仅剩 `favicon.ico` 404。
+
+## `_DDD` 数据核对结论
+
+- 终端里先前看到的 `MESH:0 / _DDD:0`、`MESH:1 / _DDD:6`、`MESH:2 / _DDD:12` 中，`0 / 6 / 12` 是 glTF accessor 索引，不是顶点属性值。
+- 进一步直接读取 `model/simpleRocket.glb` 的 BIN 数据后确认：
+  - `柱体` `_DDD` 的 192 个 float 全为 `0`
+  - `锥体` `_DDD` 的 128 个 float 全为 `0`
+  - `平面` `_DDD` 的 4 个 float 也全为 `0`
+- 因此在 `rocketFlameShader4.html` 中把 `ddd` 可视化为纯色时，全模型都落到“深灰(<= 0.01)”分支，这是数据本身导致的正确结果。
+- 结论：当前 glb 并没有把 flamePlane 的 `_DDD` 真正写成非零值；要继续走 `_DDD` 方案，需回 Blender / 导出链路修正属性写入，或改用其它可验证的稳定标记（如 `color_0` 或节点名路径）。
+

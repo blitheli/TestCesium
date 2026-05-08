@@ -40,7 +40,7 @@
         terrain: Cesium.Terrain.fromWorldTerrain(),
         animation: true,
         timeline: true,
-        shouldAnimate: true,
+        shouldAnimate: false,
         orderIndependentTranslucency: false,
       });
 
@@ -49,8 +49,27 @@
       viewer.scene.highDynamicRange = true;
       viewer.useBrowserRecommendedResolution = false;
 
+      window.rocketFlameMesh4 = {
+        viewer,
+        flameCustomShader: null,
+        rocket: null,
+        attachCustomShaderToEntityModel: null,
+        FLAME_PLANE_BB_MIN: null,
+        FLAME_PLANE_BB_MAX: null,
+        status: "booting",
+      };
+
       const FLAME_PLANE_BB_MIN = new Cesium.Cartesian3(-1.0, -1.0, -20.0);
       const FLAME_PLANE_BB_MAX = new Cesium.Cartesian3(1.0, 1.0, -20.0);
+      const INITIAL_LOAD_PAUSE_MS = 2000;
+      const USE_SOLID_COLOR_TEST = false;
+      const SOLID_COLOR_TEST_TARGET = "flame-plane";
+
+      function sleep(ms) {
+        return new Promise((resolve) => {
+          window.setTimeout(resolve, ms);
+        });
+      }
 
       function colorToVec4(c) {
         return new Cesium.Cartesian4(c.red, c.green, c.blue, c.alpha);
@@ -80,8 +99,7 @@
         u_ringContrast: { type: Cesium.UniformType.FLOAT, value: 0.4 },
       };
 
-      // 将 _DDD(->ddd) 与 UV 经 varying 传入片元，避免在 fragment 中读 fsInput.attributes.ddd
-      // 触发部分环境下 CustomShader 拼接后 customShaderStage 重载/编译失败。
+      // 使用 _DDD(->ddd) 区分 flamePlane，仅在 flamePlane 上执行尾焰 shader。
       const flameCustomShader = new Cesium.CustomShader({
         mode: Cesium.CustomShaderMode.MODIFY_MATERIAL,
         translucencyMode: Cesium.CustomShaderTranslucencyMode.INHERIT,
@@ -94,6 +112,11 @@
           void vertexMain(VertexInput vsInput, inout czm_modelVertexOutput vsOutput) {
             v_flameUv = vsInput.attributes.texCoord_0;
             v_flameTag = vsInput.attributes.ddd;
+
+            if (v_flameTag > 0.5) {
+              vec2 centeredUv = vsInput.attributes.texCoord_0 - vec2(0.5);
+              vsOutput.positionMC.xy += centeredUv * 0.35;
+            }
           }
         `,
         fragmentShaderText: `
@@ -128,9 +151,31 @@
           }
 
           void fragmentMain(FragmentInput fsInput, inout czm_modelMaterial material) {
-            if (v_flameTag <= 0.5) {
+            bool isFlamePlane = v_flameTag > 0.5;
+
+            ${USE_SOLID_COLOR_TEST && SOLID_COLOR_TEST_TARGET === "whole-model" ? `
+              vec3 debugColor = vec3(0.05, 0.95, 0.2);
+              material.diffuse = vec3(0.0);
+              material.emissive = debugColor * 2.5;
+              material.alpha = 1.0;
+              material.specular = vec3(0.0);
+              material.roughness = 1.0;
+              return;
+            ` : ``}
+
+            if (!isFlamePlane) {
               return;
             }
+
+            ${USE_SOLID_COLOR_TEST && SOLID_COLOR_TEST_TARGET === "flame-plane" ? `
+              vec3 debugColor = vec3(1.0, 0.25, 0.05);
+              material.diffuse = vec3(0.0);
+              material.emissive = debugColor * 4.0;
+              material.alpha = 1.0;
+              material.specular = vec3(0.0);
+              material.roughness = 1.0;
+              return;
+            ` : ``}
 
             vec2 uv = v_flameUv;
             float along = clamp(uv.y, 0.0, 1.0);
@@ -161,8 +206,8 @@
               * (0.55 + turb * 0.6 * u_turbulenceAmount);
 
             float farFade = 1.0 - smoothstep(0.78, 1.0, along);
-            vec3 smokeAt = mix(u_smokeColor.rgb, u_farSmokeColor.rgb, smoothstep(0.30, 0.85, along));
-            vec3 col = smokeAt;
+            vec3 plumeColor = mix(u_flameColor.rgb, u_smokeColor.rgb, smoothstep(0.30, 0.85, along));
+            vec3 col = plumeColor * plume * 0.55;
             col = mix(col, u_flameColor.rgb, clamp(flameMat, 0.0, 1.0));
             col = mix(col, u_coreColor.rgb, clamp(core, 0.0, 1.0));
 
@@ -170,15 +215,17 @@
             float ringBoost = rings * ringMask * ringRadialMask * u_ringContrast;
             col = mix(col, u_coreColor.rgb, ringBoost * 0.45);
 
-            float alpha = 0.0;
-            alpha = max(alpha, core * 1.50);
-            alpha = max(alpha, flameMat * 1.15);
-            alpha = max(alpha, plume * 0.22);
+            float visibility = 0.0;
+            visibility = max(visibility, core * 1.50);
+            visibility = max(visibility, flameMat * 1.15);
+            visibility = max(visibility, plume * 0.45);
+
+            float alpha = visibility;
             alpha *= 1.0 + ringBoost * 0.35;
             alpha *= farFade * u_intensity;
             alpha = clamp(alpha, 0.0, 1.0);
 
-            if (alpha < 0.01) {
+            if (alpha < 0.06) {
               material.alpha = 0.0;
               material.diffuse = vec3(0.0);
               material.emissive = vec3(0.0);
@@ -203,30 +250,53 @@
         );
       });
 
+      function visitPrimitives(collection, visit) {
+        if (!collection || typeof collection.length !== "number") {
+          return false;
+        }
+
+        for (let i = 0; i < collection.length; i++) {
+          const primitive = collection.get(i);
+          if (primitive instanceof Cesium.PrimitiveCollection) {
+            if (visitPrimitives(primitive, visit)) {
+              return true;
+            }
+            continue;
+          }
+
+          if (visit(primitive)) {
+            return true;
+          }
+        }
+
+        return false;
+      }
+
       function attachCustomShaderToEntityModel(entity, shader) {
         const wantId = entity.id;
-        for (let i = 0; i < viewer.scene.primitives.length; i++) {
-          const p = viewer.scene.primitives.get(i);
+        return visitPrimitives(viewer.scene.primitives, (p) => {
           const sameEntity =
             p instanceof Cesium.Model &&
             p.id &&
             (p.id === entity || p.id.id === wantId);
           if (sameEntity) {
-            const apply = () => {
-              p.customShader = shader;
-            };
-            if (p.ready) {
-              apply();
-            } else {
-              p.readyEvent.addEventListener(apply);
+            if (!p.ready) {
+              return false;
             }
-            return true;
+
+            p.backFaceCulling = false;
+
+            if (p.customShader !== shader) {
+              p.customShader = shader;
+            }
+            return p.customShader === shader;
           }
-        }
-        return false;
+          return false;
+        });
       }
 
       try {
+        window.rocketFlameMesh4.status = "loading-czml";
         const dataSource = await Cesium.CzmlDataSource.load("./simpleRocket.czml");
         await viewer.dataSources.add(dataSource);
 
@@ -238,31 +308,47 @@
 
         const rocket = dataSource.entities.getById("LaunchVehicle/LaunchVehicle1");
 
+        window.rocketFlameMesh4.flameCustomShader = flameCustomShader;
+        window.rocketFlameMesh4.rocket = rocket;
+        window.rocketFlameMesh4.attachCustomShaderToEntityModel = attachCustomShaderToEntityModel;
+        window.rocketFlameMesh4.FLAME_PLANE_BB_MIN = FLAME_PLANE_BB_MIN;
+        window.rocketFlameMesh4.FLAME_PLANE_BB_MAX = FLAME_PLANE_BB_MAX;
+        window.rocketFlameMesh4.status = "loaded-czml";
+
         if (rocket && rocket.model) {
           rocket.model.incrementallyLoadTextures = new Cesium.ConstantProperty(false);
           rocket.model.customShader = new Cesium.ConstantProperty(flameCustomShader);
-          viewer.trackedEntity = rocket;
 
+          // Cesium 1.138 在这份资产上经由 ModelGraphics.customShader 会生成缺失
+          // customShaderStage 定义的坏管线，因此仅对底层 Model primitive 挂 shader。
+          // 跟踪视角切换时底层 primitive 可能会重建，测试页持续补挂，确保 shader 不丢。
           function tryAttachPrimitiveShader() {
-            if (attachCustomShaderToEntityModel(rocket, flameCustomShader)) {
-              viewer.scene.postUpdate.removeEventListener(tryAttachPrimitiveShader);
-            }
+            attachCustomShaderToEntityModel(rocket, flameCustomShader);
           }
           viewer.scene.postUpdate.addEventListener(tryAttachPrimitiveShader);
           tryAttachPrimitiveShader();
         }
 
-        await viewer.zoomTo(dataSource);
+        if (rocket) {
+          viewer.flyTo(rocket, {
+            offset: new Cesium.HeadingPitchRange(
+              Cesium.Math.toRadians(180.0),
+              Cesium.Math.toRadians(-8.0),
+              48.0,
+            ),
+          });
+          viewer.trackedEntity = rocket;
+          window.rocketFlameMesh4.status = "tracking-rocket";
+        } else {
+          await viewer.zoomTo(dataSource);
+          window.rocketFlameMesh4.status = "zoomed-datasource";
+        }
 
-        window.rocketFlameMesh4 = {
-          viewer,
-          flameCustomShader,
-          rocket,
-          attachCustomShaderToEntityModel,
-          FLAME_PLANE_BB_MIN,
-          FLAME_PLANE_BB_MAX,
-        };
+        await sleep(INITIAL_LOAD_PAUSE_MS);
+        viewer.clock.shouldAnimate = true;
+        window.rocketFlameMesh4.status = "running";
       } catch (error) {
+        window.rocketFlameMesh4.status = "load-failed";
         console.error("Failed to load simpleRocket.czml", error);
       }
     </script>
