@@ -196,7 +196,7 @@
             ringMask *= smoothstep(0.0, 0.5, u_ringCount);
 
             float core = rf_fade(0.0, 0.55, dist) * rf_fade(0.0, 0.32, along);
-            float flameMat = rf_fade(0.05, 1.0, dist)
+            float flame = rf_fade(0.05, 1.0, dist)
               * rf_fade(0.02, 0.65, along)
               * (1.0 + turb2 * 0.25 * u_turbulenceAmount);
             float plumeDist = dist - turb3 * 0.45 * u_turbulenceAmount * smoothstep(0.20, 0.75, along);
@@ -206,34 +206,28 @@
               * (0.55 + turb * 0.6 * u_turbulenceAmount);
 
             float farFade = 1.0 - smoothstep(0.78, 1.0, along);
-            vec3 plumeColor = mix(u_flameColor.rgb, u_smokeColor.rgb, smoothstep(0.30, 0.85, along));
-            vec3 col = plumeColor * plume * 0.55;
-            col = mix(col, u_flameColor.rgb, clamp(flameMat, 0.0, 1.0));
+            vec3 smokeAt = mix(u_smokeColor.rgb, u_farSmokeColor.rgb, smoothstep(0.30, 0.85, along));
+            vec3 col = smokeAt;
+            col = mix(col, u_flameColor.rgb, clamp(flame, 0.0, 1.0));
             col = mix(col, u_coreColor.rgb, clamp(core, 0.0, 1.0));
 
             float ringRadialMask = rf_fade(0.18, 0.62, dist);
             float ringBoost = rings * ringMask * ringRadialMask * u_ringContrast;
             col = mix(col, u_coreColor.rgb, ringBoost * 0.45);
 
-            float visibility = 0.0;
-            visibility = max(visibility, core * 1.50);
-            visibility = max(visibility, flameMat * 1.15);
-            visibility = max(visibility, plume * 0.45);
-
-            float alpha = visibility;
+            float alpha = 0.0;
+            alpha = max(alpha, core * 1.50);
+            alpha = max(alpha, flame * 1.15);
+            alpha = max(alpha, plume * 0.22);
             alpha *= 1.0 + ringBoost * 0.35;
             alpha *= farFade * u_intensity;
             alpha = clamp(alpha, 0.0, 1.0);
 
-            if (alpha < 0.06) {
-              material.alpha = 0.0;
-              material.diffuse = vec3(0.0);
-              material.emissive = vec3(0.0);
-              material.specular = vec3(0.0);
-              material.roughness = 1.0;
-              return;
+            if (alpha < 0.01) {
+              discard;
             }
 
+            material.baseColor = vec4(0.0, 0.0, 0.0, 1.0);
             material.diffuse = vec3(0.0);
             material.emissive = col * (0.85 + 2.8 * alpha + ringBoost * 0.9);
             material.alpha = alpha;
