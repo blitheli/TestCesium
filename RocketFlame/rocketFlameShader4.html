@@ -77,31 +77,42 @@
 
       const flameUniforms = {
         u_time: { type: Cesium.UniformType.FLOAT, value: 0.0 },
+        // 黄白热核
         u_coreColor: {
           type: Cesium.UniformType.VEC4,
-          value: colorToVec4(Cesium.Color.fromCssColorString("#fff5e6")),
+          value: colorToVec4(Cesium.Color.fromCssColorString("#ffe6a8")),
         },
+        // 橙红焰体
         u_flameColor: {
           type: Cesium.UniformType.VEC4,
-          value: colorToVec4(Cesium.Color.fromCssColorString("#ff6b1a")),
+          value: colorToVec4(Cesium.Color.fromCssColorString("#ff6a22")),
         },
+        // 棕橙烟羽
         u_smokeColor: {
           type: Cesium.UniformType.VEC4,
-          value: colorToVec4(Cesium.Color.fromCssColorString("#9c4028")),
+          value: colorToVec4(Cesium.Color.fromCssColorString("#dba090")),
         },
+        // 远端烟色
         u_farSmokeColor: {
           type: Cesium.UniformType.VEC4,
-          value: colorToVec4(Cesium.Color.fromCssColorString("#5a5048")),
+          value: colorToVec4(Cesium.Color.fromCssColorString("#9c8d86")),
         },
-        u_intensity: { type: Cesium.UniformType.FLOAT, value: 1.5 },
-        u_turbulenceAmount: { type: Cesium.UniformType.FLOAT, value: 1.25 },
-        u_ringCount: { type: Cesium.UniformType.FLOAT, value: 1.5 },
-        u_ringContrast: { type: Cesium.UniformType.FLOAT, value: 0.28 },
+        u_intensity: { type: Cesium.UniformType.FLOAT, value: 1.35 },
+        u_turbulenceAmount: { type: Cesium.UniformType.FLOAT, value: 1.4 },
+        u_ringCount: { type: Cesium.UniformType.FLOAT, value: 2.0 },
+        u_ringContrast: { type: Cesium.UniformType.FLOAT, value: 0.4 },
+        // 自发光增强倍数（越大火焰越亮）
+        u_emissiveBoost: { type: Cesium.UniformType.FLOAT, value: 8.0 },
+        // 若火焰方向反了（喷口在尾端），设为 1.0 可翻转
+        u_flipAlong: { type: Cesium.UniformType.FLOAT, value: 0.0 },
       };
 
       // 使用 _DDD(->ddd) 区分 flamePlane，仅在 flamePlane 上执行尾焰 shader。
       const flameCustomShader = new Cesium.CustomShader({
         mode: Cesium.CustomShaderMode.MODIFY_MATERIAL,
+        // INHERIT 继承 GLB 里每个 primitive 的 alphaMode:
+        //   - 火箭本体 (OPAQUE) → 正常不透明渲染
+        //   - flamePlane 需要在 Blender 里设 alphaMode=BLEND → alpha 混合生效
         translucencyMode: Cesium.CustomShaderTranslucencyMode.INHERIT,
         uniforms: flameUniforms,
         varyings: {
@@ -112,11 +123,6 @@
           void vertexMain(VertexInput vsInput, inout czm_modelVertexOutput vsOutput) {
             v_flameUv = vsInput.attributes.texCoord_0;
             v_flameTag = vsInput.attributes.ddd;
-
-            if (v_flameTag > 0.5) {
-              vec2 centeredUv = vsInput.attributes.texCoord_0 - vec2(0.5);
-              vsOutput.positionMC.xy += centeredUv * 0.30;
-            }
           }
         `,
         fragmentShaderText: `
@@ -178,69 +184,63 @@
             ` : ``}
 
             vec2 uv = v_flameUv;
-            float along = clamp(uv.y, 0.0, 1.0);
+            // along=0 在喷口, along=1 在尾端；若方向反转，勾选 flipAlong
+            float tv = clamp(uv.y, 0.0, 1.0);
+            float along = mix(tv, 1.0 - tv, step(0.5, u_flipAlong));
             float lateral = uv.x - 0.5;
 
-            float spread = mix(0.62 + u_turbulenceAmount * 0.055, 0.052, pow(along, 0.72));
-            spread = max(spread, 0.048);
+            // 火焰向外扩散：喷口窄、末端宽（与 rocketFlameShader 一致）
+            float spread = 0.38 + along * (0.50 + u_turbulenceAmount * 0.20);
 
-            float turb = rf_fbm(vec2(lateral * 6.5, along * 3.8 - u_time * 5.0));
-            float turb2 = rf_fbm(vec2(lateral * 3.2 + 19.0, along * 2.0 - u_time * 2.4));
-            float turb3 = rf_fbm(vec2(lateral * 10.0 - 4.0, along * 6.5 - u_time * 3.8));
+            float turb  = rf_fbm(vec2(lateral * 7.0,  along * 4.0 - u_time * 5.5));
+            float turb2 = rf_fbm(vec2(lateral * 3.0 + 17.3, along * 1.8 - u_time * 2.2));
+            float turb3 = rf_fbm(vec2(lateral * 11.0 - 5.0, along * 7.0 - u_time * 3.5));
 
-            float streak = rf_fbm(vec2(lateral * 4.0 + turb * 0.4, along * 48.0 - u_time * 22.0));
-            float streakWarp = (streak - 0.5) * 0.14 * u_turbulenceAmount;
+            float wobble = (turb - 0.5) * 0.40 * u_turbulenceAmount * smoothstep(0.0, 0.55, along);
+            float dist = abs(lateral / spread + wobble) * 2.0;
 
-            float wobble = (turb - 0.5) * 0.32 * u_turbulenceAmount * smoothstep(0.0, 0.45, along);
-            float dist = abs(lateral / spread + wobble + streakWarp) * 2.0;
-
+            // 马赫盘圆环
             float ringZone = clamp((along - 0.08) / 0.40, 0.0, 1.0);
             float ringPhase = ringZone * u_ringCount * 6.2831853 + sin(lateral * 11.0 + 7.3) * 0.45;
             float rings = smoothstep(0.72, 0.96, sin(ringPhase));
             float ringMask = rf_fade(0.42, 0.55, along) * smoothstep(0.08, 0.16, along);
             ringMask *= smoothstep(0.0, 0.5, u_ringCount);
 
-            float core = rf_fade(0.0, 0.50, dist) * rf_fade(0.0, 0.38, along);
-            float flame = rf_fade(0.06, 1.05, dist)
-              * rf_fade(0.02, 0.72, along)
-              * (1.0 + turb2 * 0.22 * u_turbulenceAmount);
-            float plumeDist = dist - turb3 * 0.38 * u_turbulenceAmount * smoothstep(0.15, 0.78, along);
-            float plume = rf_fade(0.06, 1.05, plumeDist)
-              * smoothstep(0.28, 0.52, along)
-              * rf_fade(0.68, 1.0, along)
-              * (0.52 + turb * 0.55 * u_turbulenceAmount);
+            float core = rf_fade(0.0, 0.55, dist) * rf_fade(0.0, 0.65, along);
+            float flame = rf_fade(0.05, 1.0, dist)
+              * rf_fade(0.02, 0.85, along)
+              * (1.0 + turb2 * 0.25 * u_turbulenceAmount);
+            float plumeDist = dist - turb3 * 0.45 * u_turbulenceAmount * smoothstep(0.20, 0.85, along);
+            float plume = rf_fade(0.05, 1.0, plumeDist)
+              * smoothstep(0.32, 0.55, along)
+              * rf_fade(0.85, 1.0, along)
+              * (0.55 + turb * 0.6 * u_turbulenceAmount);
 
-            float farFade = 1.0 - smoothstep(0.58, 0.995, along);
-            float tailThin = mix(1.0, 0.32, smoothstep(0.35, 0.88, along));
+            float farFade = 1.0 - smoothstep(0.92, 1.0, along);
 
-            vec3 smokeAt = mix(u_smokeColor.rgb, u_farSmokeColor.rgb, smoothstep(0.22, 0.82, along));
+            vec3 smokeAt = mix(u_smokeColor.rgb, u_farSmokeColor.rgb, smoothstep(0.30, 0.85, along));
             vec3 col = smokeAt;
             col = mix(col, u_flameColor.rgb, clamp(flame, 0.0, 1.0));
-            vec3 hotWhite = vec3(1.0, 0.97, 0.92);
-            col = mix(col, mix(u_coreColor.rgb, hotWhite, 0.65), clamp(core, 0.0, 1.0));
+            col = mix(col, u_coreColor.rgb, clamp(core, 0.0, 1.0));
 
             float ringRadialMask = rf_fade(0.18, 0.62, dist);
             float ringBoost = rings * ringMask * ringRadialMask * u_ringContrast;
-            col = mix(col, u_coreColor.rgb, ringBoost * 0.38);
+            col = mix(col, u_coreColor.rgb, ringBoost * 0.45);
 
             float alpha = 0.0;
-            alpha = max(alpha, core * 1.55);
-            alpha = max(alpha, flame * 1.12);
-            alpha = max(alpha, plume * 0.20);
-            alpha *= 1.0 + ringBoost * 0.28;
-            alpha *= farFade * tailThin * u_intensity;
+            alpha = max(alpha, core  * 1.80);
+            alpha = max(alpha, flame * 1.50);
+            alpha = max(alpha, plume * 0.25);
+            alpha *= 1.0 + ringBoost * 0.35;
+            alpha *= farFade * u_intensity;
             alpha = clamp(alpha, 0.0, 1.0);
 
-            if (alpha < 0.01) {
+            if (alpha < 0.004) {
               discard;
             }
 
-            float emBase = 0.85 + 2.9 * alpha + ringBoost * 0.85;
-            vec3 em = col * emBase;
-
-            material.baseColor = vec4(0.0, 0.0, 0.0, 1.0);
             material.diffuse = vec3(0.0);
-            material.emissive = em;
+            material.emissive = col * (0.85 + 2.8 * alpha + ringBoost * 0.9) * u_emissiveBoost;
             material.alpha = alpha;
             material.specular = vec3(0.0);
             material.roughness = 1.0;
