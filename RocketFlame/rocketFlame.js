@@ -106,6 +106,8 @@ export const DEFAULT_FLAME_OPTIONS = {
   show: true,
   localTranslation: new Cesium.Cartesian3(0.0, 0.0, 0.0),
   localRotation: new Cesium.HeadingPitchRoll(0.0, 0.0, 0.0),
+  /** Optional multi-nozzle layout; see {@link RocketFlamePrimitive} `cluster` constructor option. */
+  cluster: undefined,
   uniforms: {
     intensity: 1.35,
     turbulenceAmount: 1.4,
@@ -148,6 +150,47 @@ function cloneUniforms(uniforms) {
   };
 }
 
+/**
+ * Parses one engine slot position for {@link RocketFlamePrimitive} cluster mode.
+ * Accepts plain `{ x, y, z }` (meters in parent local frame), a `Cesium.Cartesian3`,
+ * or `{ position: Cesium.Cartesian3 }`.
+ *
+ * @param {object|Cesium.Cartesian3} entry
+ * @returns {Cesium.Cartesian3}
+ */
+export function parseEnginePosition(entry) {
+  if (!entry) {
+    return new Cesium.Cartesian3(0.0, 0.0, 0.0);
+  }
+  if (entry instanceof Cesium.Cartesian3) {
+    return Cesium.Cartesian3.clone(entry);
+  }
+  if (entry.position instanceof Cesium.Cartesian3) {
+    return Cesium.Cartesian3.clone(entry.position);
+  }
+  const x = Number(entry.x);
+  const y = Number(entry.y);
+  const z = Number(entry.z);
+  return new Cesium.Cartesian3(
+    Number.isFinite(x) ? x : 0.0,
+    Number.isFinite(y) ? y : 0.0,
+    Number.isFinite(z) ? z : 0.0,
+  );
+}
+
+/**
+ * @param {object|undefined} cluster
+ * @returns {{ engines: Cesium.Cartesian3[] } | undefined}
+ */
+function cloneClusterOption(cluster) {
+  if (!cluster || !Array.isArray(cluster.engines) || cluster.engines.length === 0) {
+    return undefined;
+  }
+  return {
+    engines: cluster.engines.map((e) => parseEnginePosition(e)),
+  };
+}
+
 function mergeFlameOptions(defaults, options) {
   const merged = {
     ...defaults,
@@ -162,6 +205,7 @@ function mergeFlameOptions(defaults, options) {
       ...cloneUniforms(defaults.uniforms),
       ...(options.uniforms || {}),
     },
+    cluster: cloneClusterOption(options.cluster),
   };
   return merged;
 }
@@ -241,6 +285,36 @@ function buildAxisMatrix(axis, baseShift) {
   return Cesium.Matrix4.fromRotationTranslation(rotationMatrix3, translation);
 }
 
+/**
+ * Cross-plane rocket exhaust primitive. Single-engine by default; use `options.cluster`
+ * for multiple nozzles in the parent entity local frame (meters, same as `localTranslation`).
+ *
+ * @example
+ * // Single engine (default): flame follows parentEntity; offset with localTranslation / setStage.
+ * const flame = new RocketFlamePrimitive({ viewer, parentEntity: rocket });
+ *
+ * @example
+ * // Cluster: two engines symmetric on local Y (parent body axes).
+ * const twin = new RocketFlamePrimitive({
+ *   viewer,
+ *   parentEntity: rocket,
+ *   options: {
+ *     cluster: {
+ *       engines: [
+ *         { x: 0, y: 2.5, z: 0 },
+ *         { x: 0, y: -2.5, z: 0 },
+ *       ],
+ *     },
+ *   },
+ * });
+ * // Optional: runtime layout
+ * twin.setClusterEngines({
+ *   engines: [
+ *     { x: 0, y: 3, z: -1 },
+ *     { x: 0, y: -3, z: -1 },
+ *   ],
+ * });
+ */
 export class RocketFlamePrimitive {
   constructor({ viewer, parentEntity = null, options = {} }) {
     if (!viewer) {
@@ -253,22 +327,28 @@ export class RocketFlamePrimitive {
     this.primitive = undefined;
     this.fixedParentMatrix = undefined;
     this.localFlameMatrix = new Cesium.Matrix4();
+    this.engineLocalMatrices = [];
+    this.geometryInstanceList = [];
     this.parentWorldMatrix = new Cesium.Matrix4();
     this.posScratch = new Cesium.Cartesian3();
     this.quatScratch = new Cesium.Quaternion();
     this.rotScratch = new Cesium.Matrix3();
+    this.flameBasisScratch3 = new Cesium.Matrix3();
+    this.flameAdjScratch4 = new Cesium.Matrix4();
+    this._combinedTransScratch = new Cesium.Cartesian3();
+    this._planeFirst = new Cesium.Matrix4();
+    this._planeSecond = new Cesium.Matrix4();
     this.hasValidTransform = false;
 
     this.material = createFlameMaterial(this.options.uniforms);
     this.appearance = createFlameAppearance(this.material);
-    this.rebuildLocalMatrix();
     this.rebuildPrimitive();
   }
 
-  createFlamePlaneInstances() {
-    const geometry = new Cesium.PlaneGeometry({
-      vertexFormat: Cesium.MaterialAppearance.MaterialSupport.TEXTURED.vertexFormat,
-    });
+  /**
+   * Recomputes the two billboard plane matrices from length and radius (no engine count).
+   */
+  rebuildPlanePair() {
     const scale = Cesium.Matrix4.fromScale(
       new Cesium.Cartesian3(this.options.radius * 2.0, this.options.length, 1.0),
     );
@@ -278,27 +358,114 @@ export class RocketFlamePrimitive {
     const rotateCross = Cesium.Matrix4.fromRotationTranslation(
       Cesium.Matrix3.fromRotationZ(Cesium.Math.toRadians(90)),
     );
-    const firstPlaneMatrix = Cesium.Matrix4.multiply(
-      alignLengthToZ,
-      scale,
-      new Cesium.Matrix4(),
-    );
-    const secondPlaneMatrix = Cesium.Matrix4.multiply(
-      rotateCross,
-      firstPlaneMatrix,
-      new Cesium.Matrix4(),
-    );
+    Cesium.Matrix4.multiply(alignLengthToZ, scale, this._planeFirst);
+    Cesium.Matrix4.multiply(rotateCross, this._planeFirst, this._planeSecond);
+  }
 
-    return [
-      new Cesium.GeometryInstance({
-        geometry,
-        modelMatrix: firstPlaneMatrix,
-      }),
-      new Cesium.GeometryInstance({
-        geometry,
-        modelMatrix: secondPlaneMatrix,
-      }),
-    ];
+  /**
+   * Local flame rigid body matrix for one engine at `translation` (parent local meters),
+   * before cross-plane geometry. World pose is `parentWorld * this * plane`.
+   *
+   * @param {Cesium.Cartesian3} translation
+   * @param {Cesium.Matrix4} out
+   * @returns {Cesium.Matrix4}
+   */
+  buildFlameLocalMatrixInto(translation, out) {
+    const halfLen = this.options.length / 2;
+    const baseShift = this.options.tailOffset + halfLen;
+    const axisMatrix = buildAxisMatrix(this.options.axis, baseShift);
+    const localRotation = Cesium.Matrix3.fromHeadingPitchRoll(
+      this.options.localRotation,
+      this.flameBasisScratch3,
+    );
+    const localAdjustment = Cesium.Matrix4.fromRotationTranslation(
+      localRotation,
+      translation,
+      this.flameAdjScratch4,
+    );
+    return Cesium.Matrix4.multiply(localAdjustment, axisMatrix, out);
+  }
+
+  /**
+   * Rebuilds per-engine local matrices. With `options.cluster.engines`, each entry is an
+   * engine nozzle origin; `options.localTranslation` is added to every engine (common rig offset).
+   * Without cluster, only `options.localTranslation` is used (same as pre-cluster behavior).
+   */
+  rebuildEngineLocalMatrices() {
+    const bases = this.options.cluster?.engines;
+    const needCount = !bases || bases.length === 0 ? 1 : bases.length;
+    while (this.engineLocalMatrices.length < needCount) {
+      this.engineLocalMatrices.push(new Cesium.Matrix4());
+    }
+    this.engineLocalMatrices.length = needCount;
+
+    if (!bases || bases.length === 0) {
+      this.buildFlameLocalMatrixInto(this.options.localTranslation, this.engineLocalMatrices[0]);
+    } else {
+      for (let i = 0; i < bases.length; i++) {
+        Cesium.Cartesian3.add(
+          bases[i],
+          this.options.localTranslation,
+          this._combinedTransScratch,
+        );
+        this.buildFlameLocalMatrixInto(
+          this._combinedTransScratch,
+          this.engineLocalMatrices[i],
+        );
+      }
+    }
+    this.localFlameMatrix = this.engineLocalMatrices[0];
+  }
+
+  /**
+   * Updates each `GeometryInstance.modelMatrix` to `engineLocal * plane` without rebuilding GPU primitive.
+   */
+  refreshInstanceModelMatrices() {
+    if (!this.geometryInstanceList.length) {
+      return;
+    }
+    const planes = [this._planeFirst, this._planeSecond];
+    let idx = 0;
+    for (let e = 0; e < this.engineLocalMatrices.length; e++) {
+      const em = this.engineLocalMatrices[e];
+      for (let p = 0; p < 2; p++) {
+        Cesium.Matrix4.multiply(
+          em,
+          planes[p],
+          this.geometryInstanceList[idx].modelMatrix,
+        );
+        idx++;
+      }
+    }
+  }
+
+  createFlamePlaneInstances() {
+    const geometry = new Cesium.PlaneGeometry({
+      vertexFormat: Cesium.MaterialAppearance.MaterialSupport.TEXTURED.vertexFormat,
+    });
+    this.rebuildPlanePair();
+    this.rebuildEngineLocalMatrices();
+
+    const instances = [];
+    const planes = [this._planeFirst, this._planeSecond];
+    for (let e = 0; e < this.engineLocalMatrices.length; e++) {
+      const em = this.engineLocalMatrices[e];
+      for (let p = 0; p < 2; p++) {
+        const modelMatrix = Cesium.Matrix4.multiply(
+          em,
+          planes[p],
+          new Cesium.Matrix4(),
+        );
+        instances.push(
+          new Cesium.GeometryInstance({
+            geometry,
+            modelMatrix,
+          }),
+        );
+      }
+    }
+    this.geometryInstanceList = instances;
+    return instances;
   }
 
   rebuildPrimitive() {
@@ -318,17 +485,42 @@ export class RocketFlamePrimitive {
     this.viewer.scene.primitives.add(this.primitive);
   }
 
+  /**
+   * Replaces cluster layout. Pass `{ engines: [...] }` with the same position forms as the
+   * constructor. Empty or missing `engines` restores single-engine mode (only `localTranslation`).
+   *
+   * @param {{ engines: Array<object|Cesium.Cartesian3> }} cluster
+   */
+  setClusterEngines(cluster) {
+    const next = cloneClusterOption(cluster);
+    this.options.cluster = next;
+    const prevN = this.geometryInstanceList.length;
+    this.rebuildPlanePair();
+    this.rebuildEngineLocalMatrices();
+    const nextN = this.engineLocalMatrices.length * 2;
+    if (nextN !== prevN) {
+      this.rebuildPrimitive();
+    } else {
+      this.refreshInstanceModelMatrices();
+    }
+  }
+
+  /**
+   * @returns {Array<{ x: number, y: number, z: number }>} snapshot of per-engine base positions in cluster mode; empty array if single-engine.
+   */
+  getClusterEnginePositions() {
+    const bases = this.options.cluster?.engines;
+    if (!bases || bases.length === 0) {
+      return [];
+    }
+    return bases.map((c) => ({ x: c.x, y: c.y, z: c.z }));
+  }
+
+  /** @deprecated Use {@link rebuildEngineLocalMatrices} internally; kept for callers that relied on the old name. */
   rebuildLocalMatrix() {
-    const halfLen = this.options.length / 2;
-    const baseShift = this.options.tailOffset + halfLen;
-    const axisMatrix = buildAxisMatrix(this.options.axis, baseShift);
-    const hpr = this.options.localRotation;
-    const localRotation = Cesium.Matrix3.fromHeadingPitchRoll(hpr, new Cesium.Matrix3());
-    const localAdjustment = Cesium.Matrix4.fromRotationTranslation(
-      localRotation,
-      this.options.localTranslation,
-    );
-    Cesium.Matrix4.multiply(localAdjustment, axisMatrix, this.localFlameMatrix);
+    this.rebuildPlanePair();
+    this.rebuildEngineLocalMatrices();
+    this.refreshInstanceModelMatrices();
   }
 
   setParentEntity(entity) {
@@ -361,7 +553,8 @@ export class RocketFlamePrimitive {
 
   setAxis(axis) {
     this.options.axis = axis;
-    this.rebuildLocalMatrix();
+    this.rebuildEngineLocalMatrices();
+    this.refreshInstanceModelMatrices();
   }
 
   setStage(stageKey, value) {
@@ -375,9 +568,11 @@ export class RocketFlamePrimitive {
     else if (spec.localTranslation) this.options.localTranslation[spec.localTranslation] = clamped;
     else if (spec.localRotation) this.options.localRotation[spec.localRotation] = Cesium.Math.toRadians(clamped);
 
-    if (spec.matrix) this.rebuildLocalMatrix();
+    if (spec.matrix && !spec.rebuild) {
+      this.rebuildEngineLocalMatrices();
+      this.refreshInstanceModelMatrices();
+    }
     if (spec.rebuild) {
-      this.rebuildLocalMatrix();
       this.rebuildPrimitive();
     }
     if (this.primitive) this.primitive.show = this.options.show;
@@ -429,11 +624,7 @@ export class RocketFlamePrimitive {
       return false;
     }
 
-    Cesium.Matrix4.multiply(
-      parentMatrix,
-      this.localFlameMatrix,
-      this.primitive.modelMatrix,
-    );
+    Cesium.Matrix4.clone(parentMatrix, this.primitive.modelMatrix);
 
     this.primitive.show = this.options.show;
     this.hasValidTransform = true;
