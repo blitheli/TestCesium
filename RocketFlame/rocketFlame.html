@@ -33,7 +33,9 @@
         top: 16px;
         left: 16px;
         z-index: 10;
-        max-width: 360px;
+        max-width: 420px;
+        max-height: calc(100vh - 32px);
+        overflow: auto;
         padding: 14px 16px;
         border: 1px solid rgba(255, 255, 255, 0.18);
         border-radius: 12px;
@@ -48,11 +50,73 @@
         font-size: 17px;
       }
 
+      .panel h2 {
+        margin: 14px 0 8px;
+        font-size: 14px;
+        font-weight: 600;
+        color: rgba(255, 255, 255, 0.92);
+      }
+
       .panel p {
         margin: 0;
         color: rgba(255, 255, 255, 0.78);
         font-size: 13px;
         line-height: 1.6;
+      }
+
+      .panel .controls {
+        margin-top: 8px;
+        display: grid;
+        grid-template-columns: minmax(0, 1fr) auto;
+        gap: 6px 10px;
+        align-items: center;
+        font-size: 12px;
+      }
+
+      .panel .controls label {
+        color: rgba(255, 255, 255, 0.85);
+      }
+
+      .panel .controls input[type="range"] {
+        width: 100%;
+        grid-column: 1 / -1;
+      }
+
+      .panel .controls select {
+        grid-column: 1 / -1;
+        width: 100%;
+        padding: 6px 8px;
+        border-radius: 8px;
+        border: 1px solid rgba(255, 255, 255, 0.2);
+        background: rgba(0, 0, 0, 0.35);
+        color: #fff;
+        font-size: 12px;
+      }
+
+      .panel .controls .value {
+        color: #7fffd4;
+        font-family: Consolas, "Courier New", monospace;
+        min-width: 52px;
+        text-align: right;
+      }
+
+      .panel .controls .full {
+        grid-column: 1 / -1;
+      }
+
+      .panel button {
+        grid-column: 1 / -1;
+        padding: 8px 12px;
+        border-radius: 8px;
+        border: 1px solid rgba(127, 255, 212, 0.35);
+        background: rgba(85, 214, 190, 0.15);
+        color: #caffef;
+        font-size: 12px;
+        cursor: pointer;
+      }
+
+      .panel button:hover {
+        background: rgba(85, 214, 190, 0.28);
       }
 
       .status {
@@ -65,6 +129,13 @@
       .status.error {
         color: #ff9a9a;
       }
+
+      .hint {
+        margin-top: 6px;
+        font-size: 11px;
+        color: rgba(255, 255, 255, 0.55);
+        line-height: 1.45;
+      }
     </style>
   </head>
   <body>
@@ -73,13 +144,110 @@
       <h1>Rocket CZML 轨迹</h1>
       <p>加载同目录下的 <code>rocket.czml</code>，展示火箭模型、姿态、路径和 CZML 时钟动画。</p>
       <div id="status" class="status">正在加载 rocket.czml...</div>
+
+      <h2>GLB 关节 (AGI_articulations)</h2>
+      <p class="hint">
+        与 <code>/model/launchvehicle.glb</code> 内扩展一致；键名为「关节名 + 空格 + 阶段名」。修改后调用
+        <code>setArticulationStage</code> 与 <code>applyArticulations</code>。
+      </p>
+      <div class="controls">
+        <label class="full" for="articulationSelect">关节 Articulation</label>
+        <select id="articulationSelect" class="full"></select>
+
+        <label class="full" for="stageSelect">阶段 Stage</label>
+        <select id="stageSelect" class="full"></select>
+
+        <label for="stageRange">数值</label>
+        <span class="value" id="stageValueOut">0</span>
+        <input id="stageRange" type="range" />
+        <button type="button" id="resetStageBtn">重置当前阶段为初始值</button>
+      </div>
+      <div id="articulationStatus" class="status">等待 Model 就绪...</div>
     </aside>
 
     <script type="module">
       Cesium.Ion.defaultAccessToken =
         "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJqdGkiOiI4M2ZhYzM4My1lN2NhLTRjNTktODY1OC1jZDdmOTU3Y2ZjMGEiLCJpZCI6MTMwNTAsInNjb3BlcyI6WyJhc3IiLCJnYyJdLCJpYXQiOjE1NjI0NzA5NzB9.rRTs6chsWJdo9KNYe5VjJj2fUzMHeniIJvFQOd0aLJU";
 
+      /**
+       * 与 model/launchvehicle.glb 中 AGI_articulations 一致 (用于滑块范围与初始值)。
+       */
+      const ARTICULATION_SPECS = {
+        LaunchVehicle: {
+          MoveX: { min: -1000, max: 1000, initial: 0 },
+          MoveY: { min: -1000, max: 1000, initial: 0 },
+          MoveZ: { min: -1000, max: 1000, initial: 0 },
+          Yaw: { min: -360, max: 360, initial: 0 },
+          Pitch: { min: -360, max: 360, initial: 0 },
+          Roll: { min: -360, max: 360, initial: 0 },
+          Size: { min: 0, max: 1, initial: 1 },
+        },
+        Booster: {
+          MoveX: { min: -1000, max: 1000, initial: 0 },
+          MoveY: { min: -1000, max: 1000, initial: 0 },
+          MoveZ: { min: -1000, max: 1000, initial: 0 },
+          Yaw: { min: -360, max: 360, initial: 0 },
+          Pitch: { min: -360, max: 360, initial: 0 },
+          Roll: { min: -360, max: 360, initial: 0 },
+          Size: { min: 0, max: 1, initial: 1 },
+        },
+        BoosterEngines: {
+          Yaw: { min: -10, max: 10, initial: 0 },
+          Pitch: { min: -10, max: 10, initial: 0 },
+        },
+        BoosterFlames: {
+          Size: { min: 0, max: 1, initial: 0 },
+        },
+        InterstageAdapter: {
+          MoveX: { min: -1000, max: 1000, initial: 0 },
+          MoveY: { min: -1000, max: 1000, initial: 0 },
+          MoveZ: { min: -1000, max: 1000, initial: 0 },
+          Yaw: { min: -360, max: 360, initial: 0 },
+          Pitch: { min: -360, max: 360, initial: 0 },
+          Roll: { min: -360, max: 360, initial: 0 },
+          Size: { min: 0, max: 1, initial: 1 },
+        },
+        UpperStage: {
+          MoveX: { min: -1000, max: 1000, initial: 0 },
+          MoveY: { min: -1000, max: 1000, initial: 0 },
+          MoveZ: { min: -1000, max: 1000, initial: 0 },
+          Yaw: { min: -360, max: 360, initial: 0 },
+          Pitch: { min: -360, max: 360, initial: 0 },
+          Roll: { min: -360, max: 360, initial: 0 },
+          Size: { min: 0, max: 1, initial: 1 },
+        },
+        UpperStageEngines: {
+          Yaw: { min: -10, max: 10, initial: 0 },
+          Pitch: { min: -10, max: 10, initial: 0 },
+        },
+        UpperStageFlames: {
+          Size: { min: 0, max: 1, initial: 0 },
+        },
+        Fairing: {
+          Separate: { min: -1000, max: 0, initial: 0 },
+          Drop: { min: -1000, max: 0, initial: 0 },
+          Open: { min: 0, max: 180, initial: 0 },
+          Size: { min: 0, max: 1, initial: 1 },
+        },
+        SRBs: {
+          Separate: { min: 0, max: 1000, initial: 0 },
+          Drop: { min: -1000, max: 0, initial: 0 },
+          Rotate: { min: -360, max: 360, initial: 0 },
+          Size: { min: 0, max: 1, initial: 1 },
+        },
+        SRBFlames: {
+          Size: { min: 0, max: 1, initial: 0 },
+        },
+      };
+
       const status = document.getElementById("status");
+      const articulationStatus = document.getElementById("articulationStatus");
+      const articulationSelect = document.getElementById("articulationSelect");
+      const stageSelect = document.getElementById("stageSelect");
+      const stageRange = document.getElementById("stageRange");
+      const stageValueOut = document.getElementById("stageValueOut");
+      const resetStageBtn = document.getElementById("resetStageBtn");
+
       const viewer = new Cesium.Viewer("cesiumContainer", {
         terrain: Cesium.Terrain.fromWorldTerrain(),
         animation: true,
@@ -89,6 +257,126 @@
 
       viewer.scene.globe.depthTestAgainstTerrain = true;
       viewer.scene.globe.enableLighting = true;
+
+      let rocketEntity = null;
+      /** @type {Cesium.Model | undefined} */
+      let rocketModelPrimitive = undefined;
+
+      function findEntityModelPrimitive(entity) {
+        const wantId = entity.id;
+        for (let i = 0; i < viewer.scene.primitives.length; i++) {
+          const p = viewer.scene.primitives.get(i);
+          if (
+            p instanceof Cesium.Model &&
+            p.id &&
+            (p.id === entity || p.id.id === wantId)
+          ) {
+            return p;
+          }
+        }
+        return undefined;
+      }
+
+      function tryBindRocketModel() {
+        if (!rocketEntity) return;
+        const m = findEntityModelPrimitive(rocketEntity);
+        if (m && m.ready) {
+          rocketModelPrimitive = m;
+          articulationStatus.textContent =
+            "Model 已就绪，可拖动滑块调节关节。";
+          refreshSliderFromSelection();
+          viewer.scene.postUpdate.removeEventListener(tryBindRocketModel);
+        }
+      }
+
+      function articulationStageKey(articulationName, stageName) {
+        return articulationName + " " + stageName;
+      }
+
+      function getCurrentSpec() {
+        const art = articulationSelect.value;
+        const st = stageSelect.value;
+        return ARTICULATION_SPECS[art] && ARTICULATION_SPECS[art][st];
+      }
+
+      function applyCurrentStageValue(value) {
+        if (!rocketModelPrimitive) return;
+        const art = articulationSelect.value;
+        const st = stageSelect.value;
+        const key = articulationStageKey(art, st);
+        rocketModelPrimitive.setArticulationStage(key, value);
+        rocketModelPrimitive.applyArticulations();
+      }
+
+      function formatOut(v, spec) {
+        const span = spec.max - spec.min;
+        const decimals = span <= 20 ? 2 : span <= 200 ? 1 : 0;
+        return Number(v).toFixed(decimals);
+      }
+
+      function refreshSliderFromSelection() {
+        const spec = getCurrentSpec();
+        if (!spec) return;
+        stageRange.min = String(spec.min);
+        stageRange.max = String(spec.max);
+        stageRange.step =
+          spec.max - spec.min > 100 ? "1" : spec.max - spec.min > 20 ? "0.1" : "0.01";
+        stageRange.value = String(spec.initial);
+        stageValueOut.textContent = formatOut(spec.initial, spec);
+      }
+
+      function populateArticulationOptions() {
+        articulationSelect.innerHTML = "";
+        for (const name of Object.keys(ARTICULATION_SPECS).sort()) {
+          const opt = document.createElement("option");
+          opt.value = name;
+          opt.textContent = name;
+          articulationSelect.appendChild(opt);
+        }
+      }
+
+      function populateStageOptions() {
+        const art = articulationSelect.value;
+        const stages = ARTICULATION_SPECS[art];
+        stageSelect.innerHTML = "";
+        for (const stageName of Object.keys(stages)) {
+          const opt = document.createElement("option");
+          opt.value = stageName;
+          opt.textContent = stageName;
+          stageSelect.appendChild(opt);
+        }
+      }
+
+      populateArticulationOptions();
+      articulationSelect.value = "LaunchVehicle";
+      populateStageOptions();
+      stageSelect.value = "Yaw";
+      refreshSliderFromSelection();
+
+      articulationSelect.addEventListener("change", () => {
+        populateStageOptions();
+        refreshSliderFromSelection();
+      });
+
+      stageSelect.addEventListener("change", () => {
+        refreshSliderFromSelection();
+      });
+
+      stageRange.addEventListener("input", () => {
+        const spec = getCurrentSpec();
+        if (!spec) return;
+        const v = Number(stageRange.value);
+        stageValueOut.textContent = formatOut(v, spec);
+        applyCurrentStageValue(v);
+      });
+
+      resetStageBtn.addEventListener("click", () => {
+        const spec = getCurrentSpec();
+        if (!spec) return;
+        stageRange.value = String(spec.initial);
+        stageValueOut.textContent = formatOut(spec.initial, spec);
+        applyCurrentStageValue(spec.initial);
+      });
 
       try {
         const dataSource = await Cesium.CzmlDataSource.load("./rocket.czml");
@@ -101,16 +389,31 @@
         }
 
         const rocket = dataSource.entities.getById("LaunchVehicle/LaunchVehicle1");
+        rocketEntity = rocket;
         if (rocket) {
+          await viewer.zoomTo(rocket);
           viewer.trackedEntity = rocket;
+        } else {
+          await viewer.zoomTo(dataSource);
         }
 
-        await viewer.zoomTo(dataSource);
+        viewer.scene.postUpdate.addEventListener(tryBindRocketModel);
+        tryBindRocketModel();
+
         status.textContent = "rocket.czml 加载完成";
+
+        window.rocketFlamePage = {
+          viewer,
+          dataSource,
+          rocketEntity,
+          getModelPrimitive: () => rocketModelPrimitive,
+          ARTICULATION_SPECS,
+        };
       } catch (error) {
         console.error("Failed to load rocket.czml", error);
         status.textContent = "rocket.czml 加载失败，请确认通过静态服务器访问项目根目录。";
         status.classList.add("error");
+        articulationStatus.textContent = "未加载 CZML，关节不可用。";
       }
     </script>
   </body>
