@@ -119,6 +119,21 @@ http://localhost:8000/RocketFlame/rocketFlameShader2.html
 - 顶点阶段在裁切盒内做法向脉动（随 `u_time` / `normalMC`），片元叠加 `flicker`，与原有 fbm + 马赫环形成动态尾焰。
 - 验证：`http://localhost:8000/RocketFlame/rocketFlameShader3.html`
 
+## 火焰 Primitive 模块化 (rocketFlame.js)
+
+- `rocketFlameShader.html` 中独立 `Cesium.Primitive` 尾焰已抽为 `RocketFlame/rocketFlame.js`。
+- 核心类为 `RocketFlamePrimitive`，负责创建 cross-plane 几何、`Cesium.Material` 尾焰 shader、`MaterialAppearance` 渲染状态和每帧父对象矩阵同步。
+- 父对象绑定：
+  - `setParentEntity(entity)`：使用 CZML Entity 的 `position` / `orientation` 作为父对象位姿。
+  - `setParentTransform(position, orientation)` 或 `setParentTransform(matrix4)`：用于非 CZML Entity 的外部父对象位姿。
+  - `update(time)`：每帧计算 `primitive.modelMatrix = parentWorldMatrix * localFlameMatrix`，并同步 shader `time` uniform。
+- 类 articulation 参数接口：
+  - `setStage(stageKey, value)` / `getStage(stageKey)`。
+  - `FLAME_STAGES` 提供 `Flame Length`、`Flame Radius`、`Flame TailOffset`、`Flame Show`、`Flame Intensity`、`Flame Turbulence`、`Flame RingCount`、`Flame RingContrast`、`Flame LocalX/Y/Z`、`Flame RotateX/Y/Z`。
+  - 长度/半径会重建 Primitive；偏移/局部位移/局部旋转只重建局部矩阵；材质效果参数直接写入 uniforms。
+- 取舍：继续采用独立 Primitive，而不是塞回 glTF articulations。这样火焰 shader、透明混合、深度/剔除状态更容易独立维护，同时通过 stage API 获得类似 articulation 的调参体验。
+- 验证：`python -m http.server 8000` 后访问 `http://localhost:8000/RocketFlame/rocketFlameShader.html`，拖动面板滑块确认尾焰随火箭姿态运动且参数实时生效。
+
 ## 自定义顶点属性 `_DDD`（Blender → glTF → CustomShader）
 
 完整流程（Blender 中为 flamePlane 写入 `_DDD`、导出设置、glTF 校验、Cesium 中 `ddd` 映射与 fragment 分支注意事项）见：

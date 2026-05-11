@@ -1,4 +1,4 @@
-<!doctype html>
+﻿<!doctype html>
 <html lang="zh-CN">
   <head>
     <meta charset="utf-8" />
@@ -33,7 +33,9 @@
         top: 16px;
         left: 16px;
         z-index: 10;
-        max-width: 380px;
+        max-width: 420px;
+        max-height: calc(100vh - 32px);
+        overflow: auto;
         padding: 14px 16px;
         border: 1px solid rgba(255, 255, 255, 0.18);
         border-radius: 12px;
@@ -72,10 +74,14 @@
         width: 100%;
       }
 
+      .panel .controls select {
+        min-width: 110px;
+      }
+
       .panel .controls .value {
         color: #7fffd4;
         font-family: Consolas, "Courier New", monospace;
-        min-width: 48px;
+        min-width: 54px;
         text-align: right;
       }
 
@@ -98,7 +104,7 @@
       <p>
         在火箭尾部挂一组
         <code>cross-plane</code> Primitive,
-        通过自定义 GLSL 材质 (fbm 噪声 + time uniform) 生成动态发动机尾焰,
+        通过 <code>rocketFlame.js</code> 复用控制器生成动态发动机尾焰,
         每帧根据 CZML 给出的位置/姿态更新 <code>modelMatrix</code>。
       </p>
 
@@ -125,12 +131,58 @@
           <option value="+Y">+Y (火箭头沿本体 -Y)</option>
         </select>
         <span class="value" id="axisValue">-X</span>
+
+        <label for="showRange">显示尾焰</label>
+        <input id="showRange" type="range" min="0" max="1" step="1" value="1" />
+        <span class="value" id="showValue">ON</span>
+
+        <label for="localXRange">顶部 X 位移</label>
+        <input id="localXRange" type="range" min="-50" max="50" step="0.1" value="0" />
+        <span class="value" id="localXValue">0.0 m</span>
+
+        <label for="localYRange">顶部 Y 位移</label>
+        <input id="localYRange" type="range" min="-50" max="50" step="0.1" value="0" />
+        <span class="value" id="localYValue">0.0 m</span>
+
+        <label for="localZRange">顶部 Z 位移</label>
+        <input id="localZRange" type="range" min="-50" max="50" step="0.1" value="0" />
+        <span class="value" id="localZValue">0.0 m</span>
+
+        <label for="rotateXRange">顶部 X 旋转</label>
+        <input id="rotateXRange" type="range" min="-180" max="180" step="1" value="0" />
+        <span class="value" id="rotateXValue">0°</span>
+
+        <label for="rotateYRange">顶部 Y 旋转</label>
+        <input id="rotateYRange" type="range" min="-180" max="180" step="1" value="0" />
+        <span class="value" id="rotateYValue">0°</span>
+
+        <label for="rotateZRange">顶部 Z 旋转</label>
+        <input id="rotateZRange" type="range" min="-180" max="180" step="1" value="0" />
+        <span class="value" id="rotateZValue">0°</span>
+
+        <label for="intensityRange">强度</label>
+        <input id="intensityRange" type="range" min="0.1" max="3" step="0.05" value="1.35" />
+        <span class="value" id="intensityValue">1.35</span>
+
+        <label for="turbulenceRange">湍流</label>
+        <input id="turbulenceRange" type="range" min="0" max="2.5" step="0.05" value="1.4" />
+        <span class="value" id="turbulenceValue">1.40</span>
+
+        <label for="ringCountRange">马赫环数量</label>
+        <input id="ringCountRange" type="range" min="0" max="5" step="0.5" value="2" />
+        <span class="value" id="ringCountValue">2.0</span>
+
+        <label for="ringContrastRange">马赫环对比</label>
+        <input id="ringContrastRange" type="range" min="0" max="1.2" step="0.05" value="0.4" />
+        <span class="value" id="ringContrastValue">0.40</span>
       </div>
 
       <div id="status" class="status">正在加载 rocket.czml...</div>
     </aside>
 
     <script type="module">
+      import { FLAME_STAGES, RocketFlamePrimitive } from "./rocketFlame.js";
+
       Cesium.Ion.defaultAccessToken =
         "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJqdGkiOiI4M2ZhYzM4My1lN2NhLTRjNTktODY1OC1jZDdmOTU3Y2ZjMGEiLCJpZCI6MTMwNTAsInNjb3BlcyI6WyJhc3IiLCJnYyJdLCJpYXQiOjE1NjI0NzA5NzB9.rRTs6chsWJdo9KNYe5VjJj2fUzMHeniIJvFQOd0aLJU";
 
@@ -146,319 +198,45 @@
       viewer.scene.globe.enableLighting = true;
       viewer.useBrowserRecommendedResolution = false;
 
-      const flameState = {
-        length: 60.0,
-        radius: 5,
-        tailOffset: 31,
-        axis: "-X",
-      };
+      let rocketFlame = null;
 
-      // 参考 reference.tsx 的尾焰逻辑: 轴向火焰, 烟羽扩散, 静态马赫环。
-      // 用十字双平面复刻 PlaneGeometry 的 st: s 横向, t 轴向 (0 喷口端, 1 尖端)。
-      const flameShaderSource = `
-        uniform float time;
-        uniform vec4 coreColor;
-        uniform vec4 flameColor;
-        uniform vec4 smokeColor;
-        uniform vec4 farSmokeColor;
-        uniform float intensity;
-        uniform float turbulenceAmount;
-        uniform float ringCount;
-        uniform float ringContrast;
-
-        float hash(vec2 p) {
-          return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453123);
+      function setStageValue(stageKey, value, output, formatter) {
+        if (rocketFlame) {
+          rocketFlame.setStage(stageKey, value);
         }
+        output.textContent = formatter(value);
+      }
 
-        float noise(vec2 p) {
-          vec2 i = floor(p);
-          vec2 f = fract(p);
-          vec2 u = f * f * (3.0 - 2.0 * f);
-          return mix(
-            mix(hash(i + vec2(0.0, 0.0)), hash(i + vec2(1.0, 0.0)), u.x),
-            mix(hash(i + vec2(0.0, 1.0)), hash(i + vec2(1.0, 1.0)), u.x),
-            u.y
-          );
-        }
-
-        float fbm(vec2 p) {
-          float value = 0.0;
-          float amplitude = 0.5;
-          for (int i = 0; i < 5; i++) {
-            value += amplitude * noise(p);
-            p *= 2.05;
-            amplitude *= 0.5;
-          }
-          return value;
-        }
-
-        float fadeOut(float edge0, float edge1, float x) {
-          return 1.0 - smoothstep(edge0, edge1, x);
-        }
-
-        czm_material czm_getMaterial(czm_materialInput materialInput) {
-          czm_material m = czm_getDefaultMaterial(materialInput);
-
-          float along = clamp(materialInput.st.t, 0.0, 1.0);
-          float lateral = materialInput.st.s - 0.5;
-
-          float spread = 0.38 + along * (0.50 + turbulenceAmount * 0.20);
-          float turb = fbm(vec2(lateral * 7.0, along * 4.0 - time * 5.5));
-          float turb2 = fbm(vec2(lateral * 3.0 + 17.3, along * 1.8 - time * 2.2));
-          float turb3 = fbm(vec2(lateral * 11.0 - 5.0, along * 7.0 - time * 3.5));
-
-          float wobble = (turb - 0.5) * 0.40 * turbulenceAmount * smoothstep(0.0, 0.55, along);
-          float dist = abs(lateral / spread + wobble) * 2.0;
-
-          float ringZone = clamp((along - 0.08) / 0.40, 0.0, 1.0);
-          float ringPhase = ringZone * ringCount * 6.2831853 + sin(lateral * 11.0 + 7.3) * 0.45;
-          float rings = smoothstep(0.72, 0.96, sin(ringPhase));
-          float ringMask = fadeOut(0.42, 0.55, along) * smoothstep(0.08, 0.16, along);
-          ringMask *= smoothstep(0.0, 0.5, ringCount);
-
-          float core = fadeOut(0.0, 0.55, dist) * fadeOut(0.0, 0.32, along);
-          float flame = fadeOut(0.05, 1.0, dist)
-            * fadeOut(0.02, 0.65, along)
-            * (1.0 + turb2 * 0.25 * turbulenceAmount);
-          float plumeDist = dist - turb3 * 0.45 * turbulenceAmount * smoothstep(0.20, 0.75, along);
-          float plume = fadeOut(0.05, 1.0, plumeDist)
-            * smoothstep(0.32, 0.55, along)
-            * fadeOut(0.72, 1.0, along)
-            * (0.55 + turb * 0.6 * turbulenceAmount);
-
-          float farFade = 1.0 - smoothstep(0.78, 1.0, along);
-          vec3 smokeAt = mix(smokeColor.rgb, farSmokeColor.rgb, smoothstep(0.30, 0.85, along));
-          vec3 col = smokeAt;
-          col = mix(col, flameColor.rgb, clamp(flame, 0.0, 1.0));
-          col = mix(col, coreColor.rgb, clamp(core, 0.0, 1.0));
-
-          float ringRadialMask = fadeOut(0.18, 0.62, dist);
-          float ringBoost = rings * ringMask * ringRadialMask * ringContrast;
-          col = mix(col, coreColor.rgb, ringBoost * 0.45);
-
-          float alpha = 0.0;
-          alpha = max(alpha, core * 1.50);
-          alpha = max(alpha, flame * 1.15);
-          alpha = max(alpha, plume * 0.22);
-          alpha *= 1.0 + ringBoost * 0.35;
-          alpha *= farFade * intensity;
-          alpha = clamp(alpha, 0.0, 1.0);
-
-          if (alpha < 0.01) {
-            discard;
-          }
-
-          m.diffuse = vec3(0.0);
-          m.emission = col * (0.85 + 2.8 * alpha + ringBoost * 0.9);
-          m.alpha = alpha;
-          return m;
-        }
-      `;
-
-      const flameMaterial = new Cesium.Material({
-        translucent: true,
-        fabric: {
-          type: "RocketFlame",
-          uniforms: {
-            time: 0.0,
-            coreColor: Cesium.Color.fromCssColorString("#ffe6a8"),
-            flameColor: Cesium.Color.fromCssColorString("#ff6a22"),
-            smokeColor: Cesium.Color.fromCssColorString("#dba090"),
-            farSmokeColor: Cesium.Color.fromCssColorString("#9c8d86"),
-            intensity: 1.35,
-            turbulenceAmount: 1.4,
-            ringCount: 2.0,
-            ringContrast: 0.4,
-          },
-          source: flameShaderSource,
-        },
-      });
-
-      const flameAppearance = new Cesium.MaterialAppearance({
-        material: flameMaterial,
-        materialSupport: Cesium.MaterialAppearance.MaterialSupport.TEXTURED,
-        translucent: true,
-        closed: false,
-        renderState: {
-          depthTest: {
-            enabled: false,
-          },
-          depthMask: false,
-          blending: Cesium.BlendingState.ADDITIVE_BLEND,
-          cull: {
-            enabled: false,
-          },
-        },
-      });
-
-      let flamePrimitive = null;
-
-      function createFlamePlaneInstances() {
-        const geometry = new Cesium.PlaneGeometry({
-          vertexFormat: Cesium.MaterialAppearance.MaterialSupport.TEXTURED.vertexFormat,
+      function wireStage(inputId, outputId, stageKey, formatter) {
+        const input = document.getElementById(inputId);
+        const output = document.getElementById(outputId);
+        input.addEventListener("input", () => {
+          setStageValue(stageKey, Number(input.value), output, formatter);
         });
-        const scale = Cesium.Matrix4.fromScale(
-          new Cesium.Cartesian3(flameState.radius * 2.0, flameState.length, 1.0),
-        );
-        const alignLengthToZ = Cesium.Matrix4.fromRotationTranslation(
-          Cesium.Matrix3.fromRotationX(Cesium.Math.toRadians(90)),
-        );
-        const rotateCross = Cesium.Matrix4.fromRotationTranslation(
-          Cesium.Matrix3.fromRotationZ(Cesium.Math.toRadians(90)),
-        );
-        const firstPlaneMatrix = Cesium.Matrix4.multiply(
-          alignLengthToZ,
-          scale,
-          new Cesium.Matrix4(),
-        );
-        const secondPlaneMatrix = Cesium.Matrix4.multiply(
-          rotateCross,
-          firstPlaneMatrix,
-          new Cesium.Matrix4(),
-        );
-
-        return [
-          new Cesium.GeometryInstance({
-            geometry,
-            modelMatrix: firstPlaneMatrix,
-          }),
-          new Cesium.GeometryInstance({
-            geometry,
-            modelMatrix: secondPlaneMatrix,
-          }),
-        ];
       }
 
-      function buildFlamePrimitive() {
-        if (flamePrimitive) {
-          viewer.scene.primitives.remove(flamePrimitive);
-          flamePrimitive = null;
-        }
-        flamePrimitive = new Cesium.Primitive({
-          geometryInstances: createFlamePlaneInstances(),
-          appearance: flameAppearance,
-          asynchronous: false,
-          allowPicking: false,
-          releaseGeometryInstances: false,
-          modelMatrix: new Cesium.Matrix4(),
-        });
-        viewer.scene.primitives.add(flamePrimitive);
-      }
+      wireStage("lengthRange", "lengthValue", "Flame Length", (v) => v.toFixed(1) + " m");
+      wireStage("radiusRange", "radiusValue", "Flame Radius", (v) => v.toFixed(1) + " m");
+      wireStage("offsetRange", "offsetValue", "Flame TailOffset", (v) => v.toFixed(1) + " m");
+      wireStage("showRange", "showValue", "Flame Show", (v) => (v > 0.5 ? "ON" : "OFF"));
+      wireStage("localXRange", "localXValue", "Flame LocalX", (v) => v.toFixed(1) + " m");
+      wireStage("localYRange", "localYValue", "Flame LocalY", (v) => v.toFixed(1) + " m");
+      wireStage("localZRange", "localZValue", "Flame LocalZ", (v) => v.toFixed(1) + " m");
+      wireStage("rotateXRange", "rotateXValue", "Flame RotateX", (v) => v.toFixed(0) + "°");
+      wireStage("rotateYRange", "rotateYValue", "Flame RotateY", (v) => v.toFixed(0) + "°");
+      wireStage("rotateZRange", "rotateZValue", "Flame RotateZ", (v) => v.toFixed(0) + "°");
+      wireStage("intensityRange", "intensityValue", "Flame Intensity", (v) => v.toFixed(2));
+      wireStage("turbulenceRange", "turbulenceValue", "Flame Turbulence", (v) => v.toFixed(2));
+      wireStage("ringCountRange", "ringCountValue", "Flame RingCount", (v) => v.toFixed(1));
+      wireStage("ringContrastRange", "ringContrastValue", "Flame RingContrast", (v) => v.toFixed(2));
 
-      function buildLocalFlameMatrix() {
-        const halfLen = flameState.length / 2;
-        const baseShift = flameState.tailOffset + halfLen;
-
-        let rotationMatrix3;
-        let translation;
-
-        switch (flameState.axis) {
-          case "+X":
-            rotationMatrix3 = Cesium.Matrix3.fromRotationY(Cesium.Math.toRadians(90));
-            translation = new Cesium.Cartesian3(baseShift, 0, 0);
-            break;
-          case "-Y":
-            rotationMatrix3 = Cesium.Matrix3.fromRotationX(Cesium.Math.toRadians(90));
-            translation = new Cesium.Cartesian3(0, -baseShift, 0);
-            break;
-          case "+Y":
-            rotationMatrix3 = Cesium.Matrix3.fromRotationX(Cesium.Math.toRadians(-90));
-            translation = new Cesium.Cartesian3(0, baseShift, 0);
-            break;
-          case "-Z":
-            rotationMatrix3 = Cesium.Matrix3.fromRotationX(Cesium.Math.toRadians(180));
-            translation = new Cesium.Cartesian3(0, 0, -baseShift);
-            break;
-          case "+Z":
-            rotationMatrix3 = Cesium.Matrix3.clone(Cesium.Matrix3.IDENTITY);
-            translation = new Cesium.Cartesian3(0, 0, baseShift);
-            break;
-          case "-X":
-          default:
-            rotationMatrix3 = Cesium.Matrix3.fromRotationY(Cesium.Math.toRadians(-90));
-            translation = new Cesium.Cartesian3(-baseShift, 0, 0);
-            break;
-        }
-
-        const rotMat4 = Cesium.Matrix4.fromRotationTranslation(
-          rotationMatrix3,
-          Cesium.Cartesian3.ZERO,
-        );
-        const transMat4 = Cesium.Matrix4.fromTranslation(translation);
-        return Cesium.Matrix4.multiply(transMat4, rotMat4, new Cesium.Matrix4());
-      }
-
-      let localFlameMatrix = buildLocalFlameMatrix();
-
-      buildFlamePrimitive();
-
-      const lengthRange = document.getElementById("lengthRange");
-      const radiusRange = document.getElementById("radiusRange");
-      const offsetRange = document.getElementById("offsetRange");
       const axisSelect = document.getElementById("axisSelect");
-      const lengthValue = document.getElementById("lengthValue");
-      const radiusValue = document.getElementById("radiusValue");
-      const offsetValue = document.getElementById("offsetValue");
       const axisValue = document.getElementById("axisValue");
-
-      lengthRange.addEventListener("input", () => {
-        flameState.length = Number(lengthRange.value);
-        lengthValue.textContent = flameState.length.toFixed(1) + " m";
-        localFlameMatrix = buildLocalFlameMatrix();
-        buildFlamePrimitive();
-      });
-      radiusRange.addEventListener("input", () => {
-        flameState.radius = Number(radiusRange.value);
-        radiusValue.textContent = flameState.radius.toFixed(1) + " m";
-        buildFlamePrimitive();
-      });
-      offsetRange.addEventListener("input", () => {
-        flameState.tailOffset = Number(offsetRange.value);
-        offsetValue.textContent = flameState.tailOffset.toFixed(1) + " m";
-        localFlameMatrix = buildLocalFlameMatrix();
-      });
       axisSelect.addEventListener("change", () => {
-        flameState.axis = axisSelect.value;
-        axisValue.textContent = flameState.axis;
-        localFlameMatrix = buildLocalFlameMatrix();
-      });
-
-      let rocket = null;
-      let hasValidFlameTransform = false;
-      const posScratch = new Cesium.Cartesian3();
-      const quatScratch = new Cesium.Quaternion();
-      const rotScratch = new Cesium.Matrix3();
-      const worldScratch = new Cesium.Matrix4();
-
-      function updateFlameForTime(time) {
-        if (!rocket || !flamePrimitive) return false;
-
-        const p = rocket.position?.getValue(time, posScratch);
-        const q = rocket.orientation?.getValue(time, quatScratch);
-        if (!p || !q) {
-          flamePrimitive.show = hasValidFlameTransform;
-          return false;
+        if (rocketFlame) {
+          rocketFlame.setAxis(axisSelect.value);
         }
-        flamePrimitive.show = true;
-        hasValidFlameTransform = true;
-
-        Cesium.Matrix3.fromQuaternion(q, rotScratch);
-        Cesium.Matrix4.fromRotationTranslation(rotScratch, p, worldScratch);
-        Cesium.Matrix4.multiply(
-          worldScratch,
-          localFlameMatrix,
-          flamePrimitive.modelMatrix,
-        );
-
-        flameMaterial.uniforms.time = Cesium.JulianDate.secondsDifference(
-          time,
-          viewer.clock.startTime,
-        );
-        return true;
-      }
-
-      viewer.scene.preUpdate.addEventListener((scene, time) => {
-        updateFlameForTime(time);
+        axisValue.textContent = axisSelect.value;
       });
 
       try {
@@ -471,24 +249,30 @@
           viewer.timeline.zoomTo(dataSource.clock.startTime, dataSource.clock.stopTime);
         }
 
-        rocket = dataSource.entities.getById("LaunchVehicle/LaunchVehicle1");
-        if (rocket) {
-          viewer.trackedEntity = rocket;
-        }
+        //  获取rocket
+        const rocket = dataSource.entities.getById("LaunchVehicle/LaunchVehicle1");
 
-        await viewer.zoomTo(dataSource);
-        status.textContent = "rocket.czml 加载完成, 尾焰着色器已挂载";
+        //  创建火焰primitive
+        rocketFlame = new RocketFlamePrimitive({ viewer, parentEntity: rocket });
+
+        //  增加事件
+        viewer.scene.preUpdate.addEventListener((scene, time) => {
+          rocketFlame.update(time);
+        });
+
+        if (rocket) {
+          await viewer.zoomTo(rocket);
+          viewer.trackedEntity = rocket;
+        } else {
+          await viewer.zoomTo(dataSource);
+        }
+        status.textContent = "rocket.czml 加载完成, 尾焰控制器已挂载";
 
         window.rocketFlame = {
           viewer,
-          flameMaterial,
-          flameState,
-          getPrimitive: () => flamePrimitive,
-          updateForTime: updateFlameForTime,
-          rebuild: buildFlamePrimitive,
-          rebuildMatrix: () => {
-            localFlameMatrix = buildLocalFlameMatrix();
-          },
+          controller: rocketFlame,
+          stages: FLAME_STAGES,
+          getPrimitive: () => rocketFlame.primitive,
         };
       } catch (error) {
         console.error("Failed to load rocket.czml", error);
