@@ -104,8 +104,14 @@
       <p>
         在火箭尾部挂一组
         <code>cross-plane</code> Primitive,
-        通过 <code>rocketFlame.js</code> 复用控制器生成动态发动机尾焰,
-        每帧根据 CZML 给出的位置/姿态更新 <code>modelMatrix</code>。
+        通过 <code>rocketFlame.js</code> 复用控制器生成动态发动机尾焰。
+        默认按实体 position/orientation 更新
+        <code>modelMatrix</code>;
+        若填写 glTF 节点名并传入
+        <code>nodeName</code>, 则使用该节点世界矩阵(含 articulation)。
+        节点模式下请在
+        <code>scene.postUpdate</code> 中调用
+        <code>update</code>。
       </p>
 
       <div class="controls">
@@ -200,6 +206,12 @@
 
       let rocketFlame = null;
 
+      /**
+       * glTF 节点 `name`(例如喷口骨骼/空物体)。设为 null 时仅跟随实体 position/orientation。
+       * launchvehicle.glb 若需节点挂点, 请用 glTF 查看器确认实际名称后再填写。
+       */
+      const FLAME_GLTF_NODE_NAME = "flame0";
+
       function setStageValue(stageKey, value, output, formatter) {
         if (rocketFlame) {
           rocketFlame.setStage(stageKey, value);
@@ -252,11 +264,15 @@
         //  获取rocket
         const rocket = dataSource.entities.getById("LaunchVehicle/LaunchVehicle1");
 
-        //  创建火焰primitive
-        rocketFlame = new RocketFlamePrimitive({ viewer, parentEntity: rocket });
+        //  创建火焰 primitive (可选 nodeName: 挂到指定 glTF 节点, 便于 articulation)
+        rocketFlame = new RocketFlamePrimitive({
+          viewer,
+          parentEntity: rocket,
+          nodeName: FLAME_GLTF_NODE_NAME,
+        });
 
-        //  增加事件
-        viewer.scene.preUpdate.addEventListener((scene, time) => {
+        //  postUpdate: 与实体 Model/articulation 同帧再读节点矩阵
+        viewer.scene.postUpdate.addEventListener((scene, time) => {
           rocketFlame.update(time);
         });
 
@@ -272,6 +288,7 @@
           viewer,
           controller: rocketFlame,
           stages: FLAME_STAGES,
+          flameGltfNodeName: FLAME_GLTF_NODE_NAME,
           getPrimitive: () => rocketFlame.primitive,
         };
       } catch (error) {

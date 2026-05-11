@@ -101,7 +101,7 @@ const FLAME_SHADER_SOURCE = `
 export const DEFAULT_FLAME_OPTIONS = {
   length: 60.0,
   radius: 5.0,
-  tailOffset: 31.0,
+  tailOffset: 0.0,
   axis: "-X",
   show: true,
   localTranslation: new Cesium.Cartesian3(0.0, 0.0, 0.0),
@@ -150,6 +150,8 @@ function cloneUniforms(uniforms) {
   };
 }
 
+const missingModelNodeWarnings = new Set();
+
 /**
  * Parses one engine slot position for {@link RocketFlamePrimitive} cluster mode.
  * Accepts plain `{ x, y, z }` (meters in parent local frame), a `Cesium.Cartesian3`,
@@ -189,6 +191,122 @@ function cloneClusterOption(cluster) {
   return {
     engines: cluster.engines.map((e) => parseEnginePosition(e)),
   };
+}
+
+/**
+ * Locates the runtime {@link Cesium.Model} primitive used for an entity {@link Cesium.ModelGraphics}.
+ * Matches primitive `id` to the entity reference or `entity.id` string.
+ *
+ * @param {Cesium.Viewer} viewer
+ * @param {Cesium.Entity} entity
+ * @returns {Cesium.Model | undefined}
+ */
+export function findEntityModelPrimitive(viewer, entity) {
+  if (!viewer || !entity) {
+    return undefined;
+  }
+  const wantId = entity.id;
+  const primitives = viewer.scene.primitives;
+  for (let i = 0; i < primitives.length; i++) {
+    const p = primitives.get(i);
+    if (
+      p instanceof Cesium.Model &&
+      p.id &&
+      (p.id === entity || p.id.id === wantId)
+    ) {
+      return p;
+    }
+  }
+  return undefined;
+}
+
+/**
+ * World-space (fixed-frame) transform for a glTF node after model placement and articulations:
+ * `model.modelMatrix * computedTransform` (node local → model root → world).
+ * Call after articulations are applied; for entity models with articulations, updating the flame in
+ * `viewer.scene.postUpdate` ensures `computedTransform` matches the rendered frame.
+ *
+ * @param {Cesium.Model} model Must be `ready`
+ * @param {string} nodeName glTF node `name`
+ * @param {Cesium.Matrix4} [result]
+ * @returns {Cesium.Matrix4 | undefined}
+ */
+export function getModelNodeWorldMatrix(model, nodeName, result) {
+  if (!model || !nodeName || !model.ready) {
+    return undefined;
+  }
+  let node;
+  try {
+    node = model.getNode(nodeName);
+  } catch {
+    return undefined;
+  }
+  if (!node) {
+    const modelId = model.id?.id || model.id?.name || model.id || model._resource?.url || "unknown model";
+    const warningKey = `${modelId}:${nodeName}`;
+    if (!missingModelNodeWarnings.has(warningKey)) {
+      missingModelNodeWarnings.add(warningKey);
+      console.warn(
+        `[RocketFlamePrimitive] Cannot find glTF node "${nodeName}" on model:`,
+        modelId,
+      );
+    }
+    return undefined;
+  }
+  const runtimeNode = node._runtimeNode;
+  const computedTransform = runtimeNode && runtimeNode.computedTransform;
+  if (!computedTransform) {
+    return undefined;
+  }
+  const out = result ?? new Cesium.Matrix4();
+  return Cesium.Matrix4.multiply(model.modelMatrix, computedTransform, out);
+}
+
+/**
+ * Rigid world-space attachment matrix for a glTF node.
+ *
+ * `computedTransform` can contain node/model scale. That is correct for rendering the model, but
+ * using it directly as the flame primitive parent also scales/distorts the flame. This helper keeps
+ * the node's world translation and rotation, while stripping scale from the final matrix.
+ *
+ * @param {Cesium.Model} model Must be `ready`
+ * @param {string} nodeName glTF node `name`
+ * @param {Cesium.Matrix4} [result]
+ * @param {Cesium.Matrix4} [worldMatrixScratch]
+ * @param {Cesium.Matrix3} [rotationScratch]
+ * @param {Cesium.Cartesian3} [translationScratch]
+ * @returns {Cesium.Matrix4 | undefined}
+ */
+export function getModelNodeRigidWorldMatrix(
+  model,
+  nodeName,
+  result,
+  worldMatrixScratch,
+  rotationScratch,
+  translationScratch,
+) {
+  const worldMatrix = getModelNodeWorldMatrix(
+    model,
+    nodeName,
+    worldMatrixScratch ?? new Cesium.Matrix4(),
+  );
+  if (!worldMatrix) {
+    return undefined;
+  }
+
+  const translation = Cesium.Matrix4.getTranslation(
+    worldMatrix,
+    translationScratch ?? new Cesium.Cartesian3(),
+  );
+  const rotation = Cesium.Matrix4.getRotation(
+    worldMatrix,
+    rotationScratch ?? new Cesium.Matrix3(),
+  );
+  return Cesium.Matrix4.fromRotationTranslation(
+    rotation,
+    translation,
+    result ?? new Cesium.Matrix4(),
+  );
 }
 
 function mergeFlameOptions(defaults, options) {
@@ -294,6 +412,14 @@ function buildAxisMatrix(axis, baseShift) {
  * const flame = new RocketFlamePrimitive({ viewer, parentEntity: rocket });
  *
  * @example
+ * // Follow a glTF nozzle node (articulation-safe): pass glTF node `name`, update in postUpdate.
+ * const atNozzle = new RocketFlamePrimitive({
+ *   viewer,
+ *   parentEntity: rocket,
+ *   nodeName: "EngineNozzle",
+ * });
+ *
+ * @example
  * // Cluster: two engines symmetric on local Y (parent body axes).
  * const twin = new RocketFlamePrimitive({
  *   viewer,
@@ -316,13 +442,15 @@ function buildAxisMatrix(axis, baseShift) {
  * });
  */
 export class RocketFlamePrimitive {
-  constructor({ viewer, parentEntity = null, options = {} }) {
+  constructor({ viewer, parentEntity = null, nodeName = null, options = {} }) {
     if (!viewer) {
       throw new Error("RocketFlamePrimitive requires a Cesium.Viewer instance.");
     }
 
     this.viewer = viewer;
     this.parentEntity = parentEntity;
+    this.nodeName = nodeName != null && String(nodeName).length > 0 ? String(nodeName) : null;
+    this._entityModelCache = undefined;
     this.options = mergeFlameOptions(DEFAULT_FLAME_OPTIONS, options);
     this.primitive = undefined;
     this.fixedParentMatrix = undefined;
@@ -330,6 +458,8 @@ export class RocketFlamePrimitive {
     this.engineLocalMatrices = [];
     this.geometryInstanceList = [];
     this.parentWorldMatrix = new Cesium.Matrix4();
+    this.nodeWorldMatrixScratch = new Cesium.Matrix4();
+    this.nodeRotScratch = new Cesium.Matrix3();
     this.posScratch = new Cesium.Cartesian3();
     this.quatScratch = new Cesium.Quaternion();
     this.rotScratch = new Cesium.Matrix3();
@@ -355,10 +485,14 @@ export class RocketFlamePrimitive {
     const alignLengthToZ = Cesium.Matrix4.fromRotationTranslation(
       Cesium.Matrix3.fromRotationX(Cesium.Math.toRadians(90)),
     );
+    const moveOriginToRoot = Cesium.Matrix4.fromTranslation(
+      new Cesium.Cartesian3(0.0, 0.0, this.options.length / 2),
+    );
     const rotateCross = Cesium.Matrix4.fromRotationTranslation(
       Cesium.Matrix3.fromRotationZ(Cesium.Math.toRadians(90)),
     );
     Cesium.Matrix4.multiply(alignLengthToZ, scale, this._planeFirst);
+    Cesium.Matrix4.multiply(moveOriginToRoot, this._planeFirst, this._planeFirst);
     Cesium.Matrix4.multiply(rotateCross, this._planeFirst, this._planeSecond);
   }
 
@@ -371,8 +505,7 @@ export class RocketFlamePrimitive {
    * @returns {Cesium.Matrix4}
    */
   buildFlameLocalMatrixInto(translation, out) {
-    const halfLen = this.options.length / 2;
-    const baseShift = this.options.tailOffset + halfLen;
+    const baseShift = this.options.tailOffset;
     const axisMatrix = buildAxisMatrix(this.options.axis, baseShift);
     const localRotation = Cesium.Matrix3.fromHeadingPitchRoll(
       this.options.localRotation,
@@ -526,7 +659,44 @@ export class RocketFlamePrimitive {
   setParentEntity(entity) {
     this.parentEntity = entity;
     this.fixedParentMatrix = undefined;
+    this._entityModelCache = undefined;
     this.hasValidTransform = false;
+  }
+
+  /**
+   * When set to a non-empty string, the flame uses that glTF node's rigid world matrix
+   * (see {@link getModelNodeRigidWorldMatrix}) when the entity's model is loaded; otherwise
+   * falls back to entity position/orientation.
+   *
+   * @param {string | null | undefined} nodeName
+   */
+  setNodeName(nodeName) {
+    const next =
+      nodeName != null && String(nodeName).length > 0 ? String(nodeName) : null;
+    this.nodeName = next;
+    this._entityModelCache = undefined;
+    this.hasValidTransform = false;
+  }
+
+  _getResolvedEntityModel() {
+    if (!this.parentEntity) {
+      return undefined;
+    }
+    const cached = this._entityModelCache;
+    if (
+      cached &&
+      (!(typeof cached.isDestroyed === "function") || !cached.isDestroyed()) &&
+      cached.ready
+    ) {
+      return cached;
+    }
+    const m = findEntityModelPrimitive(this.viewer, this.parentEntity);
+    if (m && m.ready) {
+      this._entityModelCache = m;
+      return m;
+    }
+    this._entityModelCache = undefined;
+    return undefined;
   }
 
   setParentTransform(positionOrMatrix, orientation) {
@@ -541,6 +711,7 @@ export class RocketFlamePrimitive {
       );
     }
     this.parentEntity = null;
+    this._entityModelCache = undefined;
     this.hasValidTransform = false;
   }
 
@@ -596,6 +767,23 @@ export class RocketFlamePrimitive {
     }
     if (!this.parentEntity) {
       return undefined;
+    }
+
+    if (this.nodeName) {
+      const model = this._getResolvedEntityModel();
+      if (model) {
+        const nodeWorld = getModelNodeRigidWorldMatrix(
+          model,
+          this.nodeName,
+          this.parentWorldMatrix,
+          this.nodeWorldMatrixScratch,
+          this.nodeRotScratch,
+          this.posScratch,
+        );
+        if (nodeWorld) {
+          return nodeWorld;
+        }
+      }
     }
 
     const p = this.parentEntity.position?.getValue(time, this.posScratch);
