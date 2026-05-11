@@ -127,7 +127,7 @@ http://localhost:8000/RocketFlame/rocketFlameShader2.html
 
 摘要：
 
-- glTF 属性名 `_DDD` → CustomShader 中为 `**float**` 类型的 `**vsInput.attributes.ddd` / `fsInput.attributes.ddd**`。
+- glTF 属性名 `_DDD` → CustomShader 中为 `**float`** 类型的 `**vsInput.attributes.ddd` / `fsInput.attributes.ddd`**。
 - 仅火焰 primitive 含 `_DDD` 时：火焰可走分支；**无该属性的 primitive 可能不会执行自定义片段中的 `else`**，箭身保持原材质——应对火焰分支改写、`<= 阈值` 时 `**return**`，或在 Blender 中为箭身顶点同样写入 `_DDD=0`。
 
 ## rocketFlameShader4.html 编译错误排查
