@@ -109,14 +109,13 @@
         <code>modelMatrix</code>;
         若填写 glTF 节点名并传入
         <code>nodeName</code>, 则使用该节点世界矩阵(含 articulation)。
-        节点模式下请在
-        <code>scene.postUpdate</code> 中调用
-        <code>update</code>。
+        控制器会在
+        <code>scene.preRender</code> 中自动更新。
       </p>
 
       <div class="controls">
         <label for="lengthRange">尾焰长度</label>
-        <input id="lengthRange" type="range" min="2" max="80" step="0.5" value="60" />
+        <input id="lengthRange" type="range" min="2" max="120" step="0.5" value="60" />
         <span class="value" id="lengthValue">60.0 m</span>
 
         <label for="radiusRange">尾焰半径</label>
@@ -214,7 +213,7 @@
        * glTF 节点 `name`(例如喷口骨骼/空物体)。设为 null 时仅跟随实体 position/orientation。
        * launchvehicle.glb 若需节点挂点, 请用 glTF 查看器确认实际名称后再填写。
        */
-      const FLAME_GLTF_NODE_NAME = "Booster";
+      const FLAME_GLTF_NODE_NAME = "flame0";
 
       function setStageValue(stageKey, value, output, formatter) {
         if (rocketFlame) {
@@ -272,34 +271,8 @@
         });
       }
 
-      /**
-       * 在节点 `originalMatrix` (节点 local → 父节点) 基础上叠加一组 HPR, 写回 `node.matrix`。
-       * 注意 ModelNode.matrix 是局部坐标系下的变换, 所以 HPR 也作用在该节点的 local axes 上。
-       */
-      function setNodeLocalHpr(model, nodeName, headingDeg, pitchDeg, rollDeg) {
-        const node = model.getNode(nodeName);
-        if (!node) {
-          console.warn(`[scene] node not found: ${nodeName}`);
-          return;
-        }
-        const hpr = new Cesium.HeadingPitchRoll(
-          Cesium.Math.toRadians(headingDeg),
-          Cesium.Math.toRadians(pitchDeg),
-          Cesium.Math.toRadians(rollDeg),
-        );
-        const rotation = Cesium.Matrix3.fromHeadingPitchRoll(hpr);
-        const rotMatrix4 = Cesium.Matrix4.fromRotationTranslation(
-          rotation,
-          Cesium.Cartesian3.ZERO,
-        );
-        node.matrix = Cesium.Matrix4.multiply(
-          node.originalMatrix,
-          rotMatrix4,
-          new Cesium.Matrix4(),
-        );
-      }
-
       try {
+        // 加载czml
         const dataSource = await Cesium.CzmlDataSource.load("./rocket.czml");
         await viewer.dataSources.add(dataSource);
 
@@ -308,11 +281,6 @@
         if (dataSource.clock) {
           viewer.timeline.zoomTo(dataSource.clock.startTime, dataSource.clock.stopTime);
         }
-
-        //  launchvehicle.glb AGI_articulations: 阶段键为「关节名 + 空格 + 阶段名」(参见 rocketFlame.html)。
-        //  仅 ready 时调用一次可能被同一帧/后续帧的实体 Model 更新冲掉, 故在 postUpdate 里每帧施加并 apply。
-        const boosterYawStageKey = "Booster Yaw";
-        const boosterYawDegrees = 30;
 
         //  获取rocket
         const rocket = dataSource.entities.getById("LaunchVehicle/LaunchVehicle1");
@@ -323,14 +291,29 @@
           rocketModelForArticulation = await waitForEntityModel(viewer, rocket);
         }
 
+        //  和 flamePrimitive关联的就这一段化
         //  创建火焰 primitive (可选 nodeName: 挂到指定 glTF 节点, 便于 articulation)
+        //  如果删除options，那么默认只有一个火焰，且顶点在FLAME_GLTF_NODE_NAME处
         rocketFlame = new RocketFlamePrimitive({
           viewer,
           parentEntity: rocket,
           nodeName: FLAME_GLTF_NODE_NAME,
+          options: {
+            cluster: {
+              engines: [
+                { x: 1.5, y: 0, z: 0 },
+                { x: -1.5, y: 0, z: 0 },
+              ],
+            }
+          }
         });
 
-        //  postUpdate: 与实体 Model/articulation 同帧再读节点矩阵
+        //  launchvehicle.glb AGI_articulations: 阶段键为「关节名 + 空格 + 阶段名」(参见 rocketFlame.html)。
+        //  仅 ready 时调用一次可能被同一帧/后续帧的实体 Model 更新冲掉, 故在 postUpdate 里每帧施加并 apply。
+        const boosterYawStageKey = "Booster Yaw";
+        const boosterYawDegrees = 30;
+
+        //  postUpdate: 先让模型 articulation 生效, RocketFlamePrimitive 会在 preRender 自动读取节点矩阵
         viewer.scene.postUpdate.addEventListener((scene, time) => {
           if (
             rocketModelForArticulation &&
@@ -343,7 +326,6 @@
             );
             rocketModelForArticulation.applyArticulations();
           }
-          rocketFlame.update(time);
         });
 
         if (rocket) {

@@ -106,7 +106,7 @@ export const DEFAULT_FLAME_OPTIONS = {
   show: true,
   localTranslation: new Cesium.Cartesian3(0.0, 0.0, 0.0),
   localRotation: new Cesium.HeadingPitchRoll(0.0, 0.0, 0.0),
-  /** Optional multi-nozzle layout; see {@link RocketFlamePrimitive} `cluster` constructor option. */
+  /** 可选多喷口布局；参见 {@link RocketFlamePrimitive} 构造参数中的 `cluster`。 */
   cluster: undefined,
   uniforms: {
     intensity: 1.35,
@@ -121,7 +121,7 @@ export const DEFAULT_FLAME_OPTIONS = {
 };
 
 export const FLAME_STAGES = {
-  "Flame Length": { min: 2, max: 80, initial: 60, property: "length", rebuild: true },
+  "Flame Length": { min: 2, max: 120, initial: 60, property: "length", rebuild: true },
   "Flame Radius": { min: 0.2, max: 8, initial: 5, property: "radius", rebuild: true },
   "Flame TailOffset": { min: -10, max: 60, initial: 0, property: "tailOffset", matrix: true },
   "Flame Show": { min: 0, max: 1, initial: 1, property: "show" },
@@ -153,9 +153,9 @@ function cloneUniforms(uniforms) {
 const missingModelNodeWarnings = new Set();
 
 /**
- * Parses one engine slot position for {@link RocketFlamePrimitive} cluster mode.
- * Accepts plain `{ x, y, z }` (meters in parent local frame), a `Cesium.Cartesian3`,
- * or `{ position: Cesium.Cartesian3 }`.
+ * 解析 {@link RocketFlamePrimitive} 多喷口模式中的单个发动机位置。
+ * 支持普通 `{ x, y, z }`（单位为米，坐标系取决于附着父对象）、`Cesium.Cartesian3`
+ * 或 `{ position: Cesium.Cartesian3 }`。
  *
  * @param {object|Cesium.Cartesian3} entry
  * @returns {Cesium.Cartesian3}
@@ -194,8 +194,9 @@ function cloneClusterOption(cluster) {
 }
 
 /**
- * Locates the runtime {@link Cesium.Model} primitive used for an entity {@link Cesium.ModelGraphics}.
- * Matches primitive `id` to the entity reference or `entity.id` string.
+ * 查找某个 {@link Cesium.Entity} 的 {@link Cesium.ModelGraphics} 实际对应的运行时
+ * {@link Cesium.Model} primitive。
+ * 通过 primitive 的 `id` 与 entity 对象引用或 `entity.id` 字符串匹配。
  *
  * @param {Cesium.Viewer} viewer
  * @param {Cesium.Entity} entity
@@ -221,23 +222,23 @@ export function findEntityModelPrimitive(viewer, entity) {
 }
 
 /**
- * World-space (fixed-frame) transform for a glTF node after model placement and articulations.
+ * 获取 glTF 节点在模型定位和 articulation 生效后的世界坐标（fixed-frame）矩阵。
  *
- * Cesium renders a node at `computedModelMatrix * runtimeNode.computedTransform`, where
- * `computedModelMatrix = model.modelMatrix * components.transform * axisCorrectionMatrix * computedScale`.
- * The axis-correction term flips glTF +Y-up to Cesium +Z-up; multiplying `model.modelMatrix` directly
- * by `runtimeNode.computedTransform` skips this term and produces a flame that follows the node's
- * translation but appears rotated/offset relative to the rocket body.
+ * Cesium 渲染节点时使用 `computedModelMatrix * runtimeNode.computedTransform`，其中：
+ * `computedModelMatrix = model.modelMatrix * components.transform * axisCorrectionMatrix * computedScale`。
+ * `axisCorrectionMatrix` 会把 glTF 的 +Y-up 修正到 Cesium 的 +Z-up；如果直接使用
+ * `model.modelMatrix * runtimeNode.computedTransform`，会漏掉这层轴向修正，导致火焰虽然跟随
+ * 节点平移，但相对箭体出现旋转或偏移。
  *
- * This function recomputes `computedModelMatrix` from the current `model.modelMatrix` instead of
- * using `sceneGraph.computedModelMatrix`, because Entity-driven models can update `model.modelMatrix`
- * before the scene graph cache is refreshed for the current render frame.
+ * 这里基于当前帧的 `model.modelMatrix` 重新计算 `computedModelMatrix`，而不是直接读取
+ * `sceneGraph.computedModelMatrix`。Entity 驱动的模型会先更新 `model.modelMatrix`，随后才刷新
+ * sceneGraph 缓存；直接读缓存可能拿到上一帧矩阵。
  *
- * Call after articulations are applied; for entity models with articulations, updating the flame in
- * `viewer.scene.postUpdate` ensures `computedTransform` matches the rendered frame.
+ * 应在 articulation 应用后调用；{@link RocketFlamePrimitive} 会在 `viewer.scene.preRender`
+ * 自动执行更新，因此调用方在 `postUpdate` 中修改 articulation 后会被本帧火焰读取到。
  *
- * @param {Cesium.Model} model Must be `ready`
- * @param {string} nodeName glTF node `name`
+ * @param {Cesium.Model} model 必须已 `ready`
+ * @param {string} nodeName glTF 节点的 `name`；返回矩阵的平移部分就是该节点原点的世界坐标
  * @param {Cesium.Matrix4} [result]
  * @returns {Cesium.Matrix4 | undefined}
  */
@@ -280,9 +281,8 @@ export function getModelNodeWorldMatrix(model, nodeName, result) {
       ? model.scale
       : 1.0;
 
-  // Recompute Cesium's model-space placement from the current model.modelMatrix instead of
-  // reading sceneGraph.computedModelMatrix. In Entity-driven models the cached sceneGraph matrix
-  // is refreshed during Model.update, so reading it from scene.postUpdate can be one frame stale.
+  // 用当前 model.modelMatrix 即时重算 Cesium 的模型放置矩阵，不直接读 sceneGraph 缓存。
+  // Entity 驱动模型的 sceneGraph 缓存会在 Model.update 时刷新，在 scene.postUpdate 中读取可能慢一帧。
   Cesium.Matrix4.multiplyTransformation(
     model.modelMatrix,
     componentsTransform,
@@ -302,16 +302,14 @@ export function getModelNodeWorldMatrix(model, nodeName, result) {
 }
 
 /**
- * Rigid world-space attachment matrix for a glTF node.
+ * 获取 glTF 节点的刚体世界附着矩阵。
  *
- * The matrix from {@link getModelNodeWorldMatrix} can contain node/model scale, including the
- * `model.computedScale` factor used by Cesium's model placement matrix. That is correct for
- * rendering the model itself, but using it directly as the flame primitive parent also scales /
- * distorts the flame. This helper keeps the node's world translation and rotation, while stripping
- * scale from the final matrix.
+ * {@link getModelNodeWorldMatrix} 返回的矩阵可能包含节点或模型缩放，包括 Cesium 模型放置矩阵中的
+ * `model.computedScale`。这对渲染模型本身是正确的，但如果直接作为火焰 primitive 的父矩阵，
+ * 火焰也会被缩放或拉伸。本函数保留节点的世界位置与旋转，同时从最终矩阵中剥离缩放。
  *
- * @param {Cesium.Model} model Must be `ready`
- * @param {string} nodeName glTF node `name`
+ * @param {Cesium.Model} model 必须已 `ready`
+ * @param {string} nodeName glTF 节点的 `name`
  * @param {Cesium.Matrix4} [result]
  * @param {Cesium.Matrix4} [worldMatrixScratch]
  * @param {Cesium.Matrix3} [rotationScratch]
@@ -445,15 +443,22 @@ function buildAxisMatrix(axis, baseShift) {
 }
 
 /**
- * Cross-plane rocket exhaust primitive. Single-engine by default; use `options.cluster`
- * for multiple nozzles in the parent entity local frame (meters, same as `localTranslation`).
+ * 火箭尾焰 cross-plane primitive。
+ *
+ * 坐标基准由 `nodeName` 决定：
+ * - 不提供 `nodeName` 时，火焰跟随 `parentEntity` 的 position/orientation，局部偏移
+ *   `localTranslation` 与 `cluster.engines` 都以 Entity 坐标为基准。
+ * - 提供 `nodeName` 时，火焰跟随该 glTF 节点的原点；primitive 的父矩阵取该节点原点的世界
+ *   位置与旋转，`localTranslation` 与 `cluster.engines` 都以该节点局部坐标为基准。
+ *
+ * 默认是单喷口；如需多喷口，使用 `options.cluster` 配置多个喷口局部位置（单位：米）。
  *
  * @example
- * // Single engine (default): flame follows parentEntity; offset with localTranslation / setStage.
+ * // 单喷口（默认）：不传 nodeName，火焰跟随 Entity 坐标。
  * const flame = new RocketFlamePrimitive({ viewer, parentEntity: rocket });
  *
  * @example
- * // Follow a glTF nozzle node (articulation-safe): pass glTF node `name`, update in postUpdate.
+ * // 挂到 glTF 节点原点：传入 glTF 节点 name，火焰跟随该节点原点。
  * const atNozzle = new RocketFlamePrimitive({
  *   viewer,
  *   parentEntity: rocket,
@@ -461,7 +466,7 @@ function buildAxisMatrix(axis, baseShift) {
  * });
  *
  * @example
- * // Cluster: two engines symmetric on local Y (parent body axes).
+ * // 多喷口：两个发动机在当前基准坐标的局部 Y 方向对称分布。
  * const twin = new RocketFlamePrimitive({
  *   viewer,
  *   parentEntity: rocket,
@@ -474,7 +479,7 @@ function buildAxisMatrix(axis, baseShift) {
  *     },
  *   },
  * });
- * // Optional: runtime layout
+ * // 运行时也可以替换喷口布局。
  * twin.setClusterEngines({
  *   engines: [
  *     { x: 0, y: 3, z: -1 },
@@ -510,14 +515,18 @@ export class RocketFlamePrimitive {
     this._planeFirst = new Cesium.Matrix4();
     this._planeSecond = new Cesium.Matrix4();
     this.hasValidTransform = false;
+    this._autoUpdate = (scene, time) => {
+      this.update(time);
+    };
 
     this.material = createFlameMaterial(this.options.uniforms);
     this.appearance = createFlameAppearance(this.material);
     this.rebuildPrimitive();
+    this.viewer.scene.preRender.addEventListener(this._autoUpdate);
   }
 
   /**
-   * Recomputes the two billboard plane matrices from length and radius (no engine count).
+   * 根据长度和半径重新计算两片交叉平面的局部矩阵（不涉及发动机数量）。
    */
   rebuildPlanePair() {
     const scale = Cesium.Matrix4.fromScale(
@@ -538,8 +547,10 @@ export class RocketFlamePrimitive {
   }
 
   /**
-   * Local flame rigid body matrix for one engine at `translation` (parent local meters),
-   * before cross-plane geometry. World pose is `parentWorld * this * plane`.
+   * 计算单个发动机在 `translation` 位置的火焰局部刚体矩阵（单位：米）。
+   * `translation` 所在坐标系取决于是否设置 `nodeName`：
+   * 未设置时为 Entity 坐标；设置时为 glTF 节点原点的局部坐标。
+   * 最终世界姿态为 `parentWorld * this * plane`。
    *
    * @param {Cesium.Cartesian3} translation
    * @param {Cesium.Matrix4} out
@@ -561,9 +572,10 @@ export class RocketFlamePrimitive {
   }
 
   /**
-   * Rebuilds per-engine local matrices. With `options.cluster.engines`, each entry is an
-   * engine nozzle origin; `options.localTranslation` is added to every engine (common rig offset).
-   * Without cluster, only `options.localTranslation` is used (same as pre-cluster behavior).
+   * 重建每个发动机的局部矩阵。
+   * 使用 `options.cluster.engines` 时，每一项都是一个喷口原点；`options.localTranslation`
+   * 会叠加到所有喷口上，作为共同微调偏移。
+   * 不使用 cluster 时，仅使用 `options.localTranslation`（与单喷口行为一致）。
    */
   rebuildEngineLocalMatrices() {
     const bases = this.options.cluster?.engines;
@@ -592,7 +604,7 @@ export class RocketFlamePrimitive {
   }
 
   /**
-   * Updates each `GeometryInstance.modelMatrix` to `engineLocal * plane` without rebuilding GPU primitive.
+   * 仅更新每个 `GeometryInstance.modelMatrix = engineLocal * plane`，不重建 GPU primitive。
    */
   refreshInstanceModelMatrices() {
     if (!this.geometryInstanceList.length) {
@@ -660,8 +672,8 @@ export class RocketFlamePrimitive {
   }
 
   /**
-   * Replaces cluster layout. Pass `{ engines: [...] }` with the same position forms as the
-   * constructor. Empty or missing `engines` restores single-engine mode (only `localTranslation`).
+   * 替换多喷口布局。传入 `{ engines: [...] }`，位置格式与构造参数一致。
+   * `engines` 为空或缺失时恢复单喷口模式（仅使用 `localTranslation`）。
    *
    * @param {{ engines: Array<object|Cesium.Cartesian3> }} cluster
    */
@@ -680,7 +692,8 @@ export class RocketFlamePrimitive {
   }
 
   /**
-   * @returns {Array<{ x: number, y: number, z: number }>} snapshot of per-engine base positions in cluster mode; empty array if single-engine.
+   * @returns {Array<{ x: number, y: number, z: number }>} cluster 模式下每个发动机基础位置的快照；
+   * 单喷口模式返回空数组。
    */
   getClusterEnginePositions() {
     const bases = this.options.cluster?.engines;
@@ -690,7 +703,7 @@ export class RocketFlamePrimitive {
     return bases.map((c) => ({ x: c.x, y: c.y, z: c.z }));
   }
 
-  /** @deprecated Use {@link rebuildEngineLocalMatrices} internally; kept for callers that relied on the old name. */
+  /** @deprecated 内部请使用 {@link rebuildEngineLocalMatrices}；保留该方法用于兼容旧调用方。 */
   rebuildLocalMatrix() {
     this.rebuildPlanePair();
     this.rebuildEngineLocalMatrices();
@@ -705,11 +718,15 @@ export class RocketFlamePrimitive {
   }
 
   /**
-   * When set to a non-empty string, the flame uses that glTF node's rigid world matrix
-   * (see {@link getModelNodeRigidWorldMatrix}) when the entity's model is loaded; otherwise
-   * falls back to entity position/orientation.
+   * 设置火焰附着基准。
    *
-   * @param {string | null | undefined} nodeName
+   * - `nodeName` 为空、`null` 或 `undefined`：火焰以 `parentEntity` 的 position/orientation
+   *   作为父矩阵，即使用 Entity 坐标。
+   * - `nodeName` 为非空字符串：火焰以该 glTF 节点的原点作为父矩阵。节点加载成功后会使用
+   *   {@link getModelNodeRigidWorldMatrix} 读取节点原点的世界位置与旋转；火焰 primitive 的
+   *   `(0, 0, 0)` 就对应这个节点原点。
+   *
+   * @param {string | null | undefined} nodeName glTF 节点 `name`；不提供则回到 Entity 坐标。
    */
   setNodeName(nodeName) {
     const next =
@@ -865,6 +882,10 @@ export class RocketFlamePrimitive {
   }
 
   destroy() {
+    if (this._autoUpdate) {
+      this.viewer.scene.preRender.removeEventListener(this._autoUpdate);
+      this._autoUpdate = undefined;
+    }
     if (this.primitive) {
       this.viewer.scene.primitives.remove(this.primitive);
       this.primitive = undefined;
