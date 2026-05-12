@@ -104,8 +104,14 @@
       <p>
         在火箭尾部挂一组
         <code>cross-plane</code> Primitive,
-        通过 <code>rocketFlame.js</code> 复用控制器生成动态发动机尾焰,
-        每帧根据 CZML 给出的位置/姿态更新 <code>modelMatrix</code>。
+        通过 <code>rocketFlame.js</code> 复用控制器生成动态发动机尾焰。
+        默认按实体 position/orientation 更新
+        <code>modelMatrix</code>;
+        若填写 glTF 节点名并传入
+        <code>nodeName</code>, 则使用该节点世界矩阵(含 articulation)。
+        节点模式下请在
+        <code>scene.postUpdate</code> 中调用
+        <code>update</code>。
       </p>
 
       <div class="controls">
@@ -118,8 +124,8 @@
         <span class="value" id="radiusValue">5.0 m</span>
 
         <label for="offsetRange">尾部偏移</label>
-        <input id="offsetRange" type="range" min="-10" max="60" step="0.1" value="31" />
-        <span class="value" id="offsetValue">31.0 m</span>
+        <input id="offsetRange" type="range" min="-10" max="60" step="0.1" value="0" />
+        <span class="value" id="offsetValue">0.0 m</span>
 
         <label for="axisSelect">尾喷方向</label>
         <select id="axisSelect">
@@ -181,7 +187,11 @@
     </aside>
 
     <script type="module">
-      import { FLAME_STAGES, RocketFlamePrimitive } from "./rocketFlame.js";
+      import {
+        FLAME_STAGES,
+        RocketFlamePrimitive,
+        findEntityModelPrimitive,
+      } from "./rocketFlame.js";
 
       Cesium.Ion.defaultAccessToken =
         "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJqdGkiOiI4M2ZhYzM4My1lN2NhLTRjNTktODY1OC1jZDdmOTU3Y2ZjMGEiLCJpZCI6MTMwNTAsInNjb3BlcyI6WyJhc3IiLCJnYyJdLCJpYXQiOjE1NjI0NzA5NzB9.rRTs6chsWJdo9KNYe5VjJj2fUzMHeniIJvFQOd0aLJU";
@@ -199,6 +209,12 @@
       viewer.useBrowserRecommendedResolution = false;
 
       let rocketFlame = null;
+
+      /**
+       * glTF 节点 `name`(例如喷口骨骼/空物体)。设为 null 时仅跟随实体 position/orientation。
+       * launchvehicle.glb 若需节点挂点, 请用 glTF 查看器确认实际名称后再填写。
+       */
+      const FLAME_GLTF_NODE_NAME = "flame0";
 
       function setStageValue(stageKey, value, output, formatter) {
         if (rocketFlame) {
@@ -239,6 +255,50 @@
         axisValue.textContent = axisSelect.value;
       });
 
+      /**
+       * 等待 Entity 对应的 Cesium.Model 加载就绪。Entity 模式下 Model 由 DataSourceDisplay
+       * 在每帧 update 时挂进 scene.primitives, 所以这里挂一个 postUpdate 监听轮询, ready 后解绑。
+       */
+      function waitForEntityModel(viewer, entity) {
+        return new Promise((resolve) => {
+          function tryResolve() {
+            const m = findEntityModelPrimitive(viewer, entity);
+            if (m && m.ready) {
+              viewer.scene.postUpdate.removeEventListener(tryResolve);
+              resolve(m);
+            }
+          }
+          viewer.scene.postUpdate.addEventListener(tryResolve);
+        });
+      }
+
+      /**
+       * 在节点 `originalMatrix` (节点 local → 父节点) 基础上叠加一组 HPR, 写回 `node.matrix`。
+       * 注意 ModelNode.matrix 是局部坐标系下的变换, 所以 HPR 也作用在该节点的 local axes 上。
+       */
+      function setNodeLocalHpr(model, nodeName, headingDeg, pitchDeg, rollDeg) {
+        const node = model.getNode(nodeName);
+        if (!node) {
+          console.warn(`[scene] node not found: ${nodeName}`);
+          return;
+        }
+        const hpr = new Cesium.HeadingPitchRoll(
+          Cesium.Math.toRadians(headingDeg),
+          Cesium.Math.toRadians(pitchDeg),
+          Cesium.Math.toRadians(rollDeg),
+        );
+        const rotation = Cesium.Matrix3.fromHeadingPitchRoll(hpr);
+        const rotMatrix4 = Cesium.Matrix4.fromRotationTranslation(
+          rotation,
+          Cesium.Cartesian3.ZERO,
+        );
+        node.matrix = Cesium.Matrix4.multiply(
+          node.originalMatrix,
+          rotMatrix4,
+          new Cesium.Matrix4(),
+        );
+      }
+
       try {
         const dataSource = await Cesium.CzmlDataSource.load("./rocket.czml");
         await viewer.dataSources.add(dataSource);
@@ -252,11 +312,15 @@
         //  获取rocket
         const rocket = dataSource.entities.getById("LaunchVehicle/LaunchVehicle1");
 
-        //  创建火焰primitive
-        rocketFlame = new RocketFlamePrimitive({ viewer, parentEntity: rocket });
+        //  创建火焰 primitive (可选 nodeName: 挂到指定 glTF 节点, 便于 articulation)
+        rocketFlame = new RocketFlamePrimitive({
+          viewer,
+          parentEntity: rocket,
+          nodeName: FLAME_GLTF_NODE_NAME,
+        });
 
-        //  增加事件
-        viewer.scene.preUpdate.addEventListener((scene, time) => {
+        //  postUpdate: 与实体 Model/articulation 同帧再读节点矩阵
+        viewer.scene.postUpdate.addEventListener((scene, time) => {
           rocketFlame.update(time);
         });
 
@@ -272,6 +336,7 @@
           viewer,
           controller: rocketFlame,
           stages: FLAME_STAGES,
+          flameGltfNodeName: FLAME_GLTF_NODE_NAME,
           getPrimitive: () => rocketFlame.primitive,
         };
       } catch (error) {
