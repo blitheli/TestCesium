@@ -102,7 +102,7 @@ export const DEFAULT_FLAME_OPTIONS = {
   length: 60.0,
   radius: 5.0,
   tailOffset: 0.0,
-  axis: "-X",
+  axis: "-Z",
   show: true,
   localTranslation: new Cesium.Cartesian3(0.0, 0.0, 0.0),
   localRotation: new Cesium.HeadingPitchRoll(0.0, 0.0, 0.0),
@@ -123,7 +123,7 @@ export const DEFAULT_FLAME_OPTIONS = {
 export const FLAME_STAGES = {
   "Flame Length": { min: 2, max: 80, initial: 60, property: "length", rebuild: true },
   "Flame Radius": { min: 0.2, max: 8, initial: 5, property: "radius", rebuild: true },
-  "Flame TailOffset": { min: -10, max: 60, initial: 31, property: "tailOffset", matrix: true },
+  "Flame TailOffset": { min: -10, max: 60, initial: 0, property: "tailOffset", matrix: true },
   "Flame Show": { min: 0, max: 1, initial: 1, property: "show" },
   "Flame Intensity": { min: 0.1, max: 3, initial: 1.35, uniform: "intensity" },
   "Flame Turbulence": { min: 0, max: 2.5, initial: 1.4, uniform: "turbulenceAmount" },
@@ -221,8 +221,14 @@ export function findEntityModelPrimitive(viewer, entity) {
 }
 
 /**
- * World-space (fixed-frame) transform for a glTF node after model placement and articulations:
- * `model.modelMatrix * computedTransform` (node local → model root → world).
+ * World-space (fixed-frame) transform for a glTF node after model placement and articulations.
+ *
+ * Cesium renders a node at `sceneGraph.computedModelMatrix * runtimeNode.computedTransform`, where
+ * `computedModelMatrix = model.modelMatrix * components.transform * axisCorrectionMatrix * computedScale`.
+ * The axis-correction term flips glTF +Y-up to Cesium +Z-up; multiplying `model.modelMatrix` directly
+ * by `runtimeNode.computedTransform` skips this term and produces a flame that follows the node's
+ * translation but appears rotated/offset relative to the rocket body.
+ *
  * Call after articulations are applied; for entity models with articulations, updating the flame in
  * `viewer.scene.postUpdate` ensures `computedTransform` matches the rendered frame.
  *
@@ -258,16 +264,25 @@ export function getModelNodeWorldMatrix(model, nodeName, result) {
   if (!computedTransform) {
     return undefined;
   }
+  const sceneGraph = model._sceneGraph ?? model.sceneGraph;
+  const computedModelMatrix =
+    (sceneGraph && sceneGraph.computedModelMatrix) || model.modelMatrix;
   const out = result ?? new Cesium.Matrix4();
-  return Cesium.Matrix4.multiply(model.modelMatrix, computedTransform, out);
+  return Cesium.Matrix4.multiplyTransformation(
+    computedModelMatrix,
+    computedTransform,
+    out,
+  );
 }
 
 /**
  * Rigid world-space attachment matrix for a glTF node.
  *
- * `computedTransform` can contain node/model scale. That is correct for rendering the model, but
- * using it directly as the flame primitive parent also scales/distorts the flame. This helper keeps
- * the node's world translation and rotation, while stripping scale from the final matrix.
+ * The matrix from {@link getModelNodeWorldMatrix} can contain node/model scale, including the
+ * `model.computedScale` factor baked into `sceneGraph.computedModelMatrix`. That is correct for
+ * rendering the model itself, but using it directly as the flame primitive parent also scales /
+ * distorts the flame. This helper keeps the node's world translation and rotation, while stripping
+ * scale from the final matrix.
  *
  * @param {Cesium.Model} model Must be `ready`
  * @param {string} nodeName glTF node `name`
