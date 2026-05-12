@@ -214,7 +214,7 @@
        * glTF 节点 `name`(例如喷口骨骼/空物体)。设为 null 时仅跟随实体 position/orientation。
        * launchvehicle.glb 若需节点挂点, 请用 glTF 查看器确认实际名称后再填写。
        */
-      const FLAME_GLTF_NODE_NAME = "flame0";
+      const FLAME_GLTF_NODE_NAME = "Booster";
 
       function setStageValue(stageKey, value, output, formatter) {
         if (rocketFlame) {
@@ -309,8 +309,19 @@
           viewer.timeline.zoomTo(dataSource.clock.startTime, dataSource.clock.stopTime);
         }
 
+        //  launchvehicle.glb AGI_articulations: 阶段键为「关节名 + 空格 + 阶段名」(参见 rocketFlame.html)。
+        //  仅 ready 时调用一次可能被同一帧/后续帧的实体 Model 更新冲掉, 故在 postUpdate 里每帧施加并 apply。
+        const boosterYawStageKey = "Booster Yaw";
+        const boosterYawDegrees = 30;
+
         //  获取rocket
         const rocket = dataSource.entities.getById("LaunchVehicle/LaunchVehicle1");
+
+        /** @type {Cesium.Model | null} */
+        let rocketModelForArticulation = null;
+        if (rocket) {
+          rocketModelForArticulation = await waitForEntityModel(viewer, rocket);
+        }
 
         //  创建火焰 primitive (可选 nodeName: 挂到指定 glTF 节点, 便于 articulation)
         rocketFlame = new RocketFlamePrimitive({
@@ -321,6 +332,17 @@
 
         //  postUpdate: 与实体 Model/articulation 同帧再读节点矩阵
         viewer.scene.postUpdate.addEventListener((scene, time) => {
+          if (
+            rocketModelForArticulation &&
+            (!(typeof rocketModelForArticulation.isDestroyed === "function") ||
+              !rocketModelForArticulation.isDestroyed())
+          ) {
+            rocketModelForArticulation.setArticulationStage(
+              boosterYawStageKey,
+              boosterYawDegrees,
+            );
+            rocketModelForArticulation.applyArticulations();
+          }
           rocketFlame.update(time);
         });
 
@@ -338,6 +360,7 @@
           stages: FLAME_STAGES,
           flameGltfNodeName: FLAME_GLTF_NODE_NAME,
           getPrimitive: () => rocketFlame.primitive,
+          boosterArticulation: { key: boosterYawStageKey, degrees: boosterYawDegrees },
         };
       } catch (error) {
         console.error("Failed to load rocket.czml", error);

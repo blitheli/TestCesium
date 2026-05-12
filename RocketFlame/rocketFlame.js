@@ -223,11 +223,15 @@ export function findEntityModelPrimitive(viewer, entity) {
 /**
  * World-space (fixed-frame) transform for a glTF node after model placement and articulations.
  *
- * Cesium renders a node at `sceneGraph.computedModelMatrix * runtimeNode.computedTransform`, where
+ * Cesium renders a node at `computedModelMatrix * runtimeNode.computedTransform`, where
  * `computedModelMatrix = model.modelMatrix * components.transform * axisCorrectionMatrix * computedScale`.
  * The axis-correction term flips glTF +Y-up to Cesium +Z-up; multiplying `model.modelMatrix` directly
  * by `runtimeNode.computedTransform` skips this term and produces a flame that follows the node's
  * translation but appears rotated/offset relative to the rocket body.
+ *
+ * This function recomputes `computedModelMatrix` from the current `model.modelMatrix` instead of
+ * using `sceneGraph.computedModelMatrix`, because Entity-driven models can update `model.modelMatrix`
+ * before the scene graph cache is refreshed for the current render frame.
  *
  * Call after articulations are applied; for entity models with articulations, updating the flame in
  * `viewer.scene.postUpdate` ensures `computedTransform` matches the rendered frame.
@@ -264,12 +268,34 @@ export function getModelNodeWorldMatrix(model, nodeName, result) {
   if (!computedTransform) {
     return undefined;
   }
-  const sceneGraph = model._sceneGraph ?? model.sceneGraph;
-  const computedModelMatrix =
-    (sceneGraph && sceneGraph.computedModelMatrix) || model.modelMatrix;
   const out = result ?? new Cesium.Matrix4();
+  const sceneGraph = model._sceneGraph ?? model.sceneGraph;
+  const componentsTransform =
+    sceneGraph?.components?.transform ?? Cesium.Matrix4.IDENTITY;
+  const axisCorrectionMatrix =
+    sceneGraph?.axisCorrectionMatrix ?? Cesium.Matrix4.IDENTITY;
+  const computedScale = Number.isFinite(model.computedScale)
+    ? model.computedScale
+    : Number.isFinite(model.scale)
+      ? model.scale
+      : 1.0;
+
+  // Recompute Cesium's model-space placement from the current model.modelMatrix instead of
+  // reading sceneGraph.computedModelMatrix. In Entity-driven models the cached sceneGraph matrix
+  // is refreshed during Model.update, so reading it from scene.postUpdate can be one frame stale.
+  Cesium.Matrix4.multiplyTransformation(
+    model.modelMatrix,
+    componentsTransform,
+    out,
+  );
+  Cesium.Matrix4.multiplyTransformation(
+    out,
+    axisCorrectionMatrix,
+    out,
+  );
+  Cesium.Matrix4.multiplyByUniformScale(out, computedScale, out);
   return Cesium.Matrix4.multiplyTransformation(
-    computedModelMatrix,
+    out,
     computedTransform,
     out,
   );
@@ -279,7 +305,7 @@ export function getModelNodeWorldMatrix(model, nodeName, result) {
  * Rigid world-space attachment matrix for a glTF node.
  *
  * The matrix from {@link getModelNodeWorldMatrix} can contain node/model scale, including the
- * `model.computedScale` factor baked into `sceneGraph.computedModelMatrix`. That is correct for
+ * `model.computedScale` factor used by Cesium's model placement matrix. That is correct for
  * rendering the model itself, but using it directly as the flame primitive parent also scales /
  * distorts the flame. This helper keeps the node's world translation and rotation, while stripping
  * scale from the final matrix.
