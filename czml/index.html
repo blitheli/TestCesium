@@ -3,6 +3,7 @@
 <head>
   <meta charset="utf-8">
   <!-- Include the CesiumJS JavaScript and CSS files -->
+  <script src="/public/Sandcastle-header.js"></script>
   <script src="https://cesium.com/downloads/cesiumjs/releases/1.140/Build/Cesium/Cesium.js"></script>
   <link href="https://cesium.com/downloads/cesiumjs/releases/1.140/Build/Cesium/Widgets/widgets.css" rel="stylesheet">
   <style>
@@ -13,14 +14,21 @@
       padding: 0;
       overflow: hidden;
     }
+
+    #toolbar {
+      position: absolute;
+      top: 12px;
+      left: 12px;
+      z-index: 1000;
+    }
   </style>
 </head>
 <body>
   <div id="cesiumContainer"></div>
+  <div id="toolbar"></div>
   <script type="module">
     // Your access token can be found at: https://ion.cesium.com/tokens.
     // This is the default access token from your ion account
-
     Cesium.Ion.defaultAccessToken = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJqdGkiOiI4M2ZhYzM4My1lN2NhLTRjNTktODY1OC1jZDdmOTU3Y2ZjMGEiLCJpZCI6MTMwNTAsInNjb3BlcyI6WyJhc3IiLCJnYyJdLCJpYXQiOjE1NjI0NzA5NzB9.rRTs6chsWJdo9KNYe5VjJj2fUzMHeniIJvFQOd0aLJU';
 
     // Initialize the Cesium Viewer in the HTML element with the `cesiumContainer` ID.
@@ -28,14 +36,48 @@
       terrain: Cesium.Terrain.fromWorldTerrain(),
     });    
 
-
-    const dataSource = await Cesium.CzmlDataSource.load(
+    //  加载czml文件
+    const ds = await Cesium.CzmlDataSource.load(
       "../SampleData/simple.czml",
     );
-    viewer.dataSources.add(dataSource);
+    viewer.dataSources.add(ds);
 
+    // 获取ISS卫星
+    const iss = ds.entities.getById('Satellite/ISS');
+    console.log(iss);
+    // 获取所有实体
+    for (const entity of ds.entities.values) {
+      console.log(`name: ${entity.name}, id: ${entity.id}`);
+    }
+
+    Sandcastle.addToolbarButton("更改ISS轨迹颜色", () => {
+      // ISS 轨迹在 CZML 里是 path,不是 polyline
+      iss.path.material = Cesium.Color.BLUE;
+    });
+
+    //  ds中增加一个点,颜色为红色,名称为上海
+    Sandcastle.addToolbarButton("增加 上海", () => {
+      ds.entities.add({
+        name: "上海",
+        position: Cesium.Cartesian3.fromDegrees(121.4737, 31.2304),
+        point: {
+          pixelSize: 12,
+          color: Cesium.Color.RED,
+          heightReference: Cesium.HeightReference.CLAMP_TO_GROUND,
+        },
+        label: {
+          text: "上海",
+          font: "14px sans-serif",
+          fillColor: Cesium.Color.WHITE,
+          outlineColor: Cesium.Color.BLACK,
+          outlineWidth: 2,
+          style: Cesium.LabelStyle.FILL_AND_OUTLINE,
+          verticalOrigin: Cesium.VerticalOrigin.BOTTOM,
+          pixelOffset: new Cesium.Cartesian2(0, -14),
+        },
+      });
+    });
 
   </script>
- </div>
 </body>
 </html>
