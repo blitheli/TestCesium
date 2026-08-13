@@ -1,0 +1,591 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>AtmosAngLight - 地球大气散射</title>
+    <script src="https://cesium.com/downloads/cesiumjs/releases/1.140/Build/Cesium/Cesium.js"></script>
+    <link
+      href="https://cesium.com/downloads/cesiumjs/releases/1.140/Build/Cesium/Widgets/widgets.css"
+      rel="stylesheet"
+    />
+    <style>
+      html,
+      body,
+      #cesiumContainer {
+        width: 100%;
+        height: 100%;
+        margin: 0;
+        padding: 0;
+        overflow: hidden;
+      }
+
+      #controls {
+        position: absolute;
+        top: 12px;
+        left: 12px;
+        z-index: 10;
+        background: rgba(24, 24, 30, 0.78);
+        color: #ffffff;
+        padding: 12px 14px;
+        border-radius: 8px;
+        font-family: sans-serif;
+        font-size: 13px;
+        min-width: 300px;
+        max-height: calc(100% - 120px);
+        overflow-y: auto;
+        backdrop-filter: blur(4px);
+      }
+
+      #controls h1 {
+        margin: 0 0 10px;
+        font-size: 15px;
+        font-weight: 700;
+      }
+
+      #controls .hint {
+        margin: 0 0 10px;
+        color: #c5cde0;
+        line-height: 1.5;
+        font-size: 12px;
+      }
+
+      #controls .row {
+        margin-bottom: 8px;
+        display: flex;
+        align-items: center;
+        gap: 8px;
+      }
+
+      #controls .row:last-child {
+        margin-bottom: 0;
+      }
+
+      #controls label {
+        width: 118px;
+        flex-shrink: 0;
+      }
+
+      #controls input[type="range"] {
+        flex: 1;
+      }
+
+      #controls .value {
+        width: 64px;
+        text-align: right;
+        color: #d2d9ff;
+        font-variant-numeric: tabular-nums;
+      }
+
+      #controls .buttons {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 6px;
+        margin: 8px 0 10px;
+      }
+
+      #controls button {
+        border: 1px solid rgba(255, 255, 255, 0.18);
+        background: rgba(255, 255, 255, 0.08);
+        color: #fff;
+        border-radius: 6px;
+        padding: 6px 10px;
+        cursor: pointer;
+      }
+
+      #controls button.active {
+        border-color: rgba(85, 214, 190, 0.8);
+        background: rgba(85, 214, 190, 0.2);
+      }
+
+      #credit {
+        position: absolute;
+        left: 12px;
+        bottom: 36px;
+        z-index: 10;
+        color: #9aa7b8;
+        font: 11px/1.4 sans-serif;
+      }
+
+      #credit a {
+        color: #7fffd4;
+      }
+    </style>
+  </head>
+  <body>
+    <div id="cesiumContainer"></div>
+    <div id="controls">
+      <h1>地球大气散射 / ISS</h1>
+      <p class="hint">
+        太空视角下的 Rayleigh / Mie 单次散射. 地方时改太阳位置, 轨道相位改观察方向.
+      </p>
+      <div class="buttons">
+        <button id="btnLimb" class="active" type="button">边缘视角</button>
+        <button id="btnEarth" type="button">全地球</button>
+        <button id="btnFree" type="button">自由相机</button>
+      </div>
+      <div class="row">
+        <label for="localHour">地方时(h)</label>
+        <input
+          id="localHour"
+          type="range"
+          min="0"
+          max="24"
+          step="0.05"
+          value="17"
+        />
+        <span class="value" id="localHourValue">17.00</span>
+      </div>
+      <div class="row">
+        <label for="orbitPhase">轨道相位(°)</label>
+        <input
+          id="orbitPhase"
+          type="range"
+          min="0"
+          max="360"
+          step="0.5"
+          value="0"
+        />
+        <span class="value" id="orbitPhaseValue">0.0</span>
+      </div>
+      <div class="row">
+        <label for="orbitSpeed">轨道转速</label>
+        <input
+          id="orbitSpeed"
+          type="range"
+          min="0"
+          max="8"
+          step="0.1"
+          value="0"
+        />
+        <span class="value" id="orbitSpeedValue">0.0</span>
+      </div>
+      <div class="row">
+        <label for="skyIntensity">天空光强</label>
+        <input
+          id="skyIntensity"
+          type="range"
+          min="5"
+          max="120"
+          step="1"
+          value="50"
+        />
+        <span class="value" id="skyIntensityValue">50</span>
+      </div>
+      <div class="row">
+        <label for="groundIntensity">地面光强</label>
+        <input
+          id="groundIntensity"
+          type="range"
+          min="5"
+          max="80"
+          step="1"
+          value="20"
+        />
+        <span class="value" id="groundIntensityValue">20</span>
+      </div>
+      <div class="row">
+        <label for="rayleighH">Rayleigh高度(m)</label>
+        <input
+          id="rayleighH"
+          type="range"
+          min="6000"
+          max="20000"
+          step="100"
+          value="10000"
+        />
+        <span class="value" id="rayleighHValue">10000</span>
+      </div>
+      <div class="row">
+        <label for="mieG">Mie各向异性</label>
+        <input
+          id="mieG"
+          type="range"
+          min="0.5"
+          max="0.98"
+          step="0.01"
+          value="0.9"
+        />
+        <span class="value" id="mieGValue">0.90</span>
+      </div>
+      <div class="row">
+        <label for="perFragment">片元大气</label>
+        <input id="perFragment" type="checkbox" checked />
+        <span class="value" id="perFragmentValue">开启</span>
+      </div>
+      <div class="row">
+        <label for="hdr">HDR</label>
+        <input id="hdr" type="checkbox" checked />
+        <span class="value" id="hdrValue">开启</span>
+      </div>
+      <div class="row">
+        <label for="hdResolution">高清分辨率</label>
+        <input id="hdResolution" type="checkbox" checked />
+        <span class="value" id="hdResolutionValue">开启</span>
+      </div>
+    </div>
+    <div id="credit">
+      ISS model:
+      <a
+        href="https://science.nasa.gov/resource/international-space-station-3d-model/"
+        target="_blank"
+        rel="noreferrer"
+        >NASA ISS 3D Model</a
+      >, via
+      <a
+        href="https://github.com/takram-design-engineering/three-geospatial/tree/b629cac68a3473e0ecef853bef92ee30b0b5a620/packages/atmosphere"
+        target="_blank"
+        rel="noreferrer"
+        >three-geospatial/atmosphere</a
+      >.
+    </div>
+    <script type="module">
+      Cesium.Ion.defaultAccessToken =
+        "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJqdGkiOiI4M2ZhYzM4My1lN2NhLTRjNTktODY1OC1jZDdmOTU3Y2ZjMGEiLCJpZCI6MTMwNTAsInNjb3BlcyI6WyJhc3IiLCJnYyJdLCJpYXQiOjE1NjI0NzA5NzB9.rRTs6chsWJdo9KNYe5VjJj2fUzMHeniIJvFQOd0aLJU";
+
+      const ISS_LON = -110;
+      const ISS_LAT = 45;
+      const ISS_ALTITUDE = 408000;
+      const REFERENCE_DATE = Date.UTC(2022, 4, 30);
+
+      const startPosition = Cesium.Cartesian3.fromDegrees(
+        ISS_LON,
+        ISS_LAT,
+        ISS_ALTITUDE,
+      );
+      const startEnu = Cesium.Transforms.eastNorthUpToFixedFrame(startPosition);
+      const east = Cesium.Matrix4.getColumn(
+        startEnu,
+        0,
+        new Cesium.Cartesian3(),
+      );
+      const orbitAxis = Cesium.Cartesian3.cross(
+        startPosition,
+        east,
+        new Cesium.Cartesian3(),
+      );
+      Cesium.Cartesian3.normalize(orbitAxis, orbitAxis);
+
+      const mu = 3.986004418e14;
+      const orbitRadius = Cesium.Cartesian3.magnitude(startPosition);
+      const orbitSpeedRad = Math.sqrt(mu / (orbitRadius * orbitRadius * orbitRadius));
+
+      const viewer = new Cesium.Viewer("cesiumContainer", {
+        terrain: Cesium.Terrain.fromWorldTerrain(),
+        useBrowserRecommendedResolution: false,
+        msaaSamples: 4,
+        shouldAnimate: false,
+        baseLayerPicker: false,
+        geocoder: false,
+        sceneModePicker: false,
+        navigationHelpButton: false,
+        animation: true,
+        timeline: true,
+        shadows: true,
+      });
+
+      const scene = viewer.scene;
+      const globe = scene.globe;
+      const skyAtmosphere = scene.skyAtmosphere;
+
+      scene.msaaSamples = 4;
+      scene.fxaa = true;
+      scene.highDynamicRange = true;
+      scene.globe.enableLighting = true;
+      scene.globe.showGroundAtmosphere = true;
+      scene.globe.dynamicAtmosphereLighting = true;
+      scene.globe.dynamicAtmosphereLightingFromSun = true;
+      scene.globe.atmosphereLightIntensity = 20.0;
+      skyAtmosphere.show = true;
+      skyAtmosphere.perFragmentAtmosphere = true;
+      skyAtmosphere.atmosphereLightIntensity = 50.0;
+      scene.fog.enabled = true;
+      scene.skyBox.show = true;
+      scene.sun.show = true;
+      scene.moon.show = true;
+      scene.screenSpaceCameraController.minimumZoomDistance = 40;
+      scene.screenSpaceCameraController.maximumZoomDistance = 4.0e7;
+
+      if (
+        scene.atmosphere &&
+        Cesium.DynamicAtmosphereLightingType
+      ) {
+        scene.atmosphere.dynamicLighting =
+          Cesium.DynamicAtmosphereLightingType.SUNLIGHT;
+      }
+
+      scene.light = new Cesium.SunLight({
+        intensity: 2.0,
+      });
+
+      const scratchQuat = new Cesium.Quaternion();
+      const scratchMat3 = new Cesium.Matrix3();
+      const scratchPos = new Cesium.Cartesian3();
+      const scratchVel = new Cesium.Cartesian3();
+      const scratchOmega = new Cesium.Cartesian3();
+      const scratchEnu = new Cesium.Matrix4();
+      const scratchCam = new Cesium.Cartesian3();
+      const scratchDir = new Cesium.Cartesian3();
+      const scratchUp = new Cesium.Cartesian3();
+      const scratchProj = new Cesium.Cartesian3();
+      const limbOffsetEnu = new Cesium.Cartesian3(-240, -70, 48);
+      const limbLookEnu = new Cesium.Cartesian3(-0.82, -0.12, -0.56);
+
+      let orbitPhase = 0;
+      let orbitRate = 0;
+      let cameraMode = "limb";
+      let lastWallMs = performance.now();
+
+      function issPosition(phase, result) {
+        const q = Cesium.Quaternion.fromAxisAngle(
+          orbitAxis,
+          phase,
+          scratchQuat,
+        );
+        const rot = Cesium.Matrix3.fromQuaternion(q, scratchMat3);
+        return Cesium.Matrix3.multiplyByVector(
+          rot,
+          startPosition,
+          result || new Cesium.Cartesian3(),
+        );
+      }
+
+      function issVelocity(phase, result) {
+        const pos = issPosition(phase, scratchPos);
+        Cesium.Cartesian3.multiplyByScalar(
+          orbitAxis,
+          orbitSpeedRad,
+          scratchOmega,
+        );
+        return Cesium.Cartesian3.cross(
+          scratchOmega,
+          pos,
+          result || new Cesium.Cartesian3(),
+        );
+      }
+
+      function issOrientation(phase, result) {
+        const pos = issPosition(phase, scratchPos);
+        const vel = issVelocity(phase, scratchVel);
+        const rot = Cesium.Transforms.rotationMatrixFromPositionVelocity(
+          pos,
+          vel,
+          Cesium.Ellipsoid.WGS84,
+          scratchMat3,
+        );
+        return Cesium.Quaternion.fromRotationMatrix(
+          rot,
+          result || new Cesium.Quaternion(),
+        );
+      }
+
+      function setLocalSolarTime(localHour) {
+        const utcHour = localHour - ISS_LON / 15;
+        const dayMs = REFERENCE_DATE + utcHour * 3600 * 1000;
+        viewer.clock.currentTime = Cesium.JulianDate.fromDate(new Date(dayMs));
+      }
+
+      setLocalSolarTime(17);
+      viewer.clock.shouldAnimate = false;
+      viewer.clock.multiplier = 1;
+      const dayStart = Cesium.JulianDate.fromDate(new Date(REFERENCE_DATE));
+      const dayStop = Cesium.JulianDate.addDays(
+        dayStart,
+        2,
+        new Cesium.JulianDate(),
+      );
+      viewer.clock.startTime = dayStart;
+      viewer.clock.stopTime = dayStop;
+      viewer.clock.clockRange = Cesium.ClockRange.LOOP_STOP;
+      viewer.timeline.zoomTo(dayStart, dayStop);
+
+      const iss = viewer.entities.add({
+        id: "ISS",
+        name: "ISS",
+        position: new Cesium.CallbackProperty((time, result) => {
+          return issPosition(orbitPhase, result);
+        }, false),
+        orientation: new Cesium.CallbackProperty((time, result) => {
+          return issOrientation(orbitPhase, result);
+        }, false),
+        model: {
+          uri: "./iss.glb",
+          minimumPixelSize: 48,
+          maximumScale: 20000,
+          scale: 1.0,
+          runAnimations: false,
+          shadows: Cesium.ShadowMode.ENABLED,
+        },
+        label: {
+          text: "ISS",
+          font: "13px sans-serif",
+          fillColor: Cesium.Color.WHITE,
+          outlineColor: Cesium.Color.BLACK,
+          outlineWidth: 2,
+          style: Cesium.LabelStyle.FILL_AND_OUTLINE,
+          pixelOffset: new Cesium.Cartesian2(0, -28),
+          disableDepthTestDistance: Number.POSITIVE_INFINITY,
+          scaleByDistance: new Cesium.NearFarScalar(80, 1.0, 8.0e5, 0.0),
+        },
+      });
+
+      function applyLimbCamera() {
+        const pos = issPosition(orbitPhase, scratchPos);
+        const enu = Cesium.Transforms.eastNorthUpToFixedFrame(
+          pos,
+          Cesium.Ellipsoid.WGS84,
+          scratchEnu,
+        );
+        const camPos = Cesium.Matrix4.multiplyByPoint(
+          enu,
+          limbOffsetEnu,
+          scratchCam,
+        );
+        const lookDir = Cesium.Matrix4.multiplyByPointAsVector(
+          enu,
+          limbLookEnu,
+          scratchDir,
+        );
+        Cesium.Cartesian3.normalize(lookDir, lookDir);
+        const up = Cesium.Cartesian3.normalize(pos, scratchUp);
+        const along = Cesium.Cartesian3.multiplyByScalar(
+          lookDir,
+          Cesium.Cartesian3.dot(up, lookDir),
+          scratchProj,
+        );
+        Cesium.Cartesian3.subtract(up, along, up);
+        Cesium.Cartesian3.normalize(up, up);
+        viewer.camera.setView({
+          destination: camPos,
+          orientation: {
+            direction: lookDir,
+            up: up,
+          },
+        });
+      }
+
+      function applyEarthCamera() {
+        viewer.trackedEntity = undefined;
+        viewer.camera.flyTo({
+          destination: Cesium.Cartesian3.fromDegrees(ISS_LON, ISS_LAT, 1.8e7),
+          orientation: {
+            heading: 0,
+            pitch: Cesium.Math.toRadians(-90),
+            roll: 0,
+          },
+          duration: 1.2,
+        });
+      }
+
+      function setCameraMode(mode) {
+        cameraMode = mode;
+        document.getElementById("btnLimb").classList.toggle("active", mode === "limb");
+        document.getElementById("btnEarth").classList.toggle("active", mode === "earth");
+        document.getElementById("btnFree").classList.toggle("active", mode === "free");
+        scene.screenSpaceCameraController.enableInputs = mode !== "limb";
+        if (mode === "limb") {
+          viewer.trackedEntity = undefined;
+          applyLimbCamera();
+        } else if (mode === "earth") {
+          applyEarthCamera();
+        } else {
+          viewer.trackedEntity = undefined;
+        }
+      }
+
+      scene.preRender.addEventListener(() => {
+        const now = performance.now();
+        const dt = (now - lastWallMs) / 1000;
+        lastWallMs = now;
+        if (orbitRate > 0 && dt > 0 && dt < 2) {
+          orbitPhase = (orbitPhase + orbitRate * dt) % Cesium.Math.TWO_PI;
+          const deg = Cesium.Math.toDegrees(orbitPhase);
+          document.getElementById("orbitPhase").value = String(deg);
+          document.getElementById("orbitPhaseValue").textContent = deg.toFixed(1);
+        }
+        if (cameraMode === "limb") {
+          applyLimbCamera();
+        }
+      });
+
+      function bindRange(id, onChange, digits) {
+        const input = document.getElementById(id);
+        const valueEl = document.getElementById(`${id}Value`);
+        const apply = () => {
+          const value = Number(input.value);
+          valueEl.textContent = value.toFixed(digits);
+          onChange(value);
+        };
+        input.addEventListener("input", apply);
+        apply();
+      }
+
+      bindRange("localHour", setLocalSolarTime, 2);
+      bindRange(
+        "orbitPhase",
+        (deg) => {
+          orbitPhase = Cesium.Math.toRadians(deg);
+          if (cameraMode === "limb") {
+            applyLimbCamera();
+          }
+        },
+        1,
+      );
+      bindRange("orbitSpeed", (value) => {
+        orbitRate = Cesium.Math.toRadians(value);
+      }, 1);
+      bindRange("skyIntensity", (value) => {
+        skyAtmosphere.atmosphereLightIntensity = value;
+      }, 0);
+      bindRange("groundIntensity", (value) => {
+        globe.atmosphereLightIntensity = value;
+      }, 0);
+      bindRange("rayleighH", (value) => {
+        skyAtmosphere.atmosphereRayleighScaleHeight = value;
+        globe.atmosphereRayleighScaleHeight = value;
+      }, 0);
+      bindRange("mieG", (value) => {
+        skyAtmosphere.atmosphereMieAnisotropy = value;
+        globe.atmosphereMieAnisotropy = value;
+      }, 2);
+
+      const perFragmentInput = document.getElementById("perFragment");
+      const hdrInput = document.getElementById("hdr");
+      const hdResolutionInput = document.getElementById("hdResolution");
+
+      perFragmentInput.addEventListener("change", () => {
+        const enabled = perFragmentInput.checked;
+        skyAtmosphere.perFragmentAtmosphere = enabled;
+        document.getElementById("perFragmentValue").textContent = enabled
+          ? "开启"
+          : "关闭";
+      });
+      hdrInput.addEventListener("change", () => {
+        const enabled = hdrInput.checked;
+        scene.highDynamicRange = enabled;
+        document.getElementById("hdrValue").textContent = enabled
+          ? "开启"
+          : "关闭";
+      });
+      hdResolutionInput.addEventListener("change", () => {
+        const enabled = hdResolutionInput.checked;
+        viewer.useBrowserRecommendedResolution = !enabled;
+        document.getElementById("hdResolutionValue").textContent = enabled
+          ? "开启"
+          : "关闭";
+      });
+
+      document.getElementById("btnLimb").addEventListener("click", () => {
+        setCameraMode("limb");
+      });
+      document.getElementById("btnEarth").addEventListener("click", () => {
+        setCameraMode("earth");
+      });
+      document.getElementById("btnFree").addEventListener("click", () => {
+        setCameraMode("free");
+      });
+
+      setCameraMode("limb");
+    </script>
+  </body>
+</html>
