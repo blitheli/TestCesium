@@ -377,10 +377,12 @@
       viewer.terrainShadows = Cesium.ShadowMode.ENABLED;
       viewer.shadows = true;
       globe.baseColor = Cesium.Color.fromBytes(8, 24, 56, 255);
-      globe.lightingFadeOutDistance = 2.0e7;
-      globe.lightingFadeInDistance = 3.0e7;
-      globe.nightFadeOutDistance = 2.0e7;
-      globe.nightFadeInDistance = 3.0e7;
+      // 默认约 1e7 m 以下会取消夜侧着色, 拉近后夜半球变亮.
+      // 降到接近 0, ISS/近距视角也保持黑夜半球变黑.
+      globe.lightingFadeOutDistance = 0.0;
+      globe.lightingFadeInDistance = 1.0e5;
+      globe.nightFadeOutDistance = 0.0;
+      globe.nightFadeInDistance = 1.0e5;
 
       const scratchQuat = new Cesium.Quaternion();
       const scratchMat3 = new Cesium.Matrix3();
