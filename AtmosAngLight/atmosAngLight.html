@@ -32,15 +32,47 @@
         font-family: sans-serif;
         font-size: 13px;
         min-width: 300px;
+        max-width: min(360px, calc(100vw - 24px));
         max-height: calc(100% - 120px);
         overflow-y: auto;
         backdrop-filter: blur(4px);
       }
 
-      #controls h1 {
+      #controls.collapsed {
+        min-width: 0;
+        max-width: none;
+        overflow: hidden;
+      }
+
+      #controls.collapsed #controlsBody {
+        display: none;
+      }
+
+      #controls .header {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 10px;
         margin: 0 0 10px;
+      }
+
+      #controls.collapsed .header {
+        margin: 0;
+      }
+
+      #controls h1 {
+        margin: 0;
         font-size: 15px;
         font-weight: 700;
+      }
+
+      #controls .toggle {
+        flex-shrink: 0;
+        width: 28px;
+        height: 28px;
+        padding: 0;
+        line-height: 1;
+        font-size: 16px;
       }
 
       #controls .hint {
@@ -115,125 +147,140 @@
   <body>
     <div id="cesiumContainer"></div>
     <div id="controls">
-      <h1>地球大气散射 / ISS</h1>
-      <p class="hint">
-        太空视角下的 Rayleigh / Mie 单次散射. 地方时改太阳位置, 轨道相位改观察方向.
-      </p>
-      <div class="buttons">
-        <button id="btnLimb" class="active" type="button">边缘视角</button>
-        <button id="btnEarth" type="button">全地球</button>
-        <button id="btnFree" type="button">自由相机</button>
+      <div class="header">
+        <h1>地球大气散射 / ISS</h1>
+        <button
+          id="btnTogglePanel"
+          class="toggle"
+          type="button"
+          title="折叠面板"
+          aria-expanded="true"
+          aria-controls="controlsBody"
+        >
+          −
+        </button>
       </div>
-      <div class="row">
-        <label for="camRange">相机距离(m)</label>
-        <input
-          id="camRange"
-          type="range"
-          min="120"
-          max="4000"
-          step="10"
-          value="900"
-        />
-        <span class="value" id="camRangeValue">900</span>
-      </div>
-      <div class="row">
-        <label for="localHour">地方时(h)</label>
-        <input
-          id="localHour"
-          type="range"
-          min="0"
-          max="24"
-          step="0.05"
-          value="17"
-        />
-        <span class="value" id="localHourValue">17.00</span>
-      </div>
-      <div class="row">
-        <label for="orbitPhase">轨道相位(°)</label>
-        <input
-          id="orbitPhase"
-          type="range"
-          min="0"
-          max="360"
-          step="0.5"
-          value="0"
-        />
-        <span class="value" id="orbitPhaseValue">0.0</span>
-      </div>
-      <div class="row">
-        <label for="orbitSpeed">轨道转速</label>
-        <input
-          id="orbitSpeed"
-          type="range"
-          min="0"
-          max="8"
-          step="0.1"
-          value="0"
-        />
-        <span class="value" id="orbitSpeedValue">0.0</span>
-      </div>
-      <div class="row">
-        <label for="skyIntensity">天空光强</label>
-        <input
-          id="skyIntensity"
-          type="range"
-          min="5"
-          max="120"
-          step="1"
-          value="50"
-        />
-        <span class="value" id="skyIntensityValue">50</span>
-      </div>
-      <div class="row">
-        <label for="groundIntensity">地面光强</label>
-        <input
-          id="groundIntensity"
-          type="range"
-          min="5"
-          max="80"
-          step="1"
-          value="20"
-        />
-        <span class="value" id="groundIntensityValue">20</span>
-      </div>
-      <div class="row">
-        <label for="rayleighH">Rayleigh高度(m)</label>
-        <input
-          id="rayleighH"
-          type="range"
-          min="6000"
-          max="20000"
-          step="100"
-          value="10000"
-        />
-        <span class="value" id="rayleighHValue">10000</span>
-      </div>
-      <div class="row">
-        <label for="mieG">Mie各向异性</label>
-        <input
-          id="mieG"
-          type="range"
-          min="0.5"
-          max="0.98"
-          step="0.01"
-          value="0.9"
-        />
-        <span class="value" id="mieGValue">0.90</span>
-      </div>
-      <div class="row">
-        <label for="perFragment">片元大气</label>
-        <input id="perFragment" type="checkbox" checked />
-        <span class="value" id="perFragmentValue">开启</span>
-      </div>
-      <div class="row">
-        <label for="hdr">HDR</label>
-        <input id="hdr" type="checkbox" checked />
-        <span class="value" id="hdrValue">开启</span>
-      </div>
-      <div class="row">
-        <label for="hdResolution">高清分辨率</label>
-        <input id="hdResolution" type="checkbox" checked />
-        <span class="value" id="hdResolutionValue">开启</span>
+      <div id="controlsBody">
+        <p class="hint">
+          太空视角下的 Rayleigh / Mie 单次散射. 边缘视角默认贴近 ISS, 用来看帆板投射的硬阴影; 之后可用鼠标旋转缩放. 地方时改太阳位置, 轨道相位改观察方向.
+        </p>
+        <div class="buttons">
+          <button id="btnLimb" class="active" type="button">边缘视角</button>
+          <button id="btnEarth" type="button">全地球</button>
+          <button id="btnFree" type="button">自由相机</button>
+          <button id="btnLighting" class="active" type="button">光照:开</button>
+        </div>
+        <div class="row">
+          <label for="camRange">相机距离(m)</label>
+          <input
+            id="camRange"
+            type="range"
+            min="120"
+            max="80000"
+            step="10"
+            value="500"
+          />
+          <span class="value" id="camRangeValue">500</span>
+        </div>
+        <div class="row">
+          <label for="localHour">地方时(h)</label>
+          <input
+            id="localHour"
+            type="range"
+            min="0"
+            max="24"
+            step="0.05"
+            value="17"
+          />
+          <span class="value" id="localHourValue">17.00</span>
+        </div>
+        <div class="row">
+          <label for="orbitPhase">轨道相位(°)</label>
+          <input
+            id="orbitPhase"
+            type="range"
+            min="0"
+            max="360"
+            step="0.5"
+            value="0"
+          />
+          <span class="value" id="orbitPhaseValue">0.0</span>
+        </div>
+        <div class="row">
+          <label for="orbitSpeed">轨道转速</label>
+          <input
+            id="orbitSpeed"
+            type="range"
+            min="0"
+            max="8"
+            step="0.1"
+            value="0"
+          />
+          <span class="value" id="orbitSpeedValue">0.0</span>
+        </div>
+        <div class="row">
+          <label for="skyIntensity">天空光强</label>
+          <input
+            id="skyIntensity"
+            type="range"
+            min="5"
+            max="120"
+            step="1"
+            value="50"
+          />
+          <span class="value" id="skyIntensityValue">50</span>
+        </div>
+        <div class="row">
+          <label for="groundIntensity">地面光强</label>
+          <input
+            id="groundIntensity"
+            type="range"
+            min="5"
+            max="80"
+            step="1"
+            value="20"
+          />
+          <span class="value" id="groundIntensityValue">20</span>
+        </div>
+        <div class="row">
+          <label for="rayleighH">Rayleigh高度(m)</label>
+          <input
+            id="rayleighH"
+            type="range"
+            min="6000"
+            max="20000"
+            step="100"
+            value="10000"
+          />
+          <span class="value" id="rayleighHValue">10000</span>
+        </div>
+        <div class="row">
+          <label for="mieG">Mie各向异性</label>
+          <input
+            id="mieG"
+            type="range"
+            min="0.5"
+            max="0.98"
+            step="0.01"
+            value="0.9"
+          />
+          <span class="value" id="mieGValue">0.90</span>
+        </div>
+        <div class="row">
+          <label for="perFragment">片元大气</label>
+          <input id="perFragment" type="checkbox" checked />
+          <span class="value" id="perFragmentValue">开启</span>
+        </div>
+        <div class="row">
+          <label for="hdr">HDR</label>
+          <input id="hdr" type="checkbox" checked />
+          <span class="value" id="hdrValue">开启</span>
+        </div>
+        <div class="row">
+          <label for="hdResolution">高清分辨率</label>
+          <input id="hdResolution" type="checkbox" checked />
+          <span class="value" id="hdResolutionValue">开启</span>
+        </div>
       </div>
     </div>
     <div id="credit">
@@ -316,20 +363,19 @@
       scene.skyBox.show = true;
       scene.sun.show = true;
       scene.moon.show = true;
-      scene.screenSpaceCameraController.minimumZoomDistance = 40;
+      scene.logarithmicDepthBuffer = true;
+      scene.globe.depthTestAgainstTerrain = false;
+      scene.screenSpaceCameraController.minimumZoomDistance = 50;
       scene.screenSpaceCameraController.maximumZoomDistance = 4.0e7;
+      scene.screenSpaceCameraController.enableInputs = true;
 
-      if (
-        scene.atmosphere &&
-        Cesium.DynamicAtmosphereLightingType
-      ) {
-        scene.atmosphere.dynamicLighting =
-          Cesium.DynamicAtmosphereLightingType.SUNLIGHT;
-      }
-
-      scene.light = new Cesium.SunLight({
-        intensity: 2.0,
-      });
+      const shadowMap = viewer.shadowMap;
+      shadowMap.enabled = true;
+      shadowMap.maximumDistance = 10000.0;
+      shadowMap.size = 2048;
+      shadowMap.softShadows = false;
+      viewer.terrainShadows = Cesium.ShadowMode.ENABLED;
+      viewer.shadows = true;
       globe.baseColor = Cesium.Color.fromBytes(8, 24, 56, 255);
       globe.lightingFadeOutDistance = 2.0e7;
       globe.lightingFadeInDistance = 3.0e7;
@@ -346,9 +392,8 @@
       const scratchDir = new Cesium.Cartesian3();
       const scratchUp = new Cesium.Cartesian3();
       const scratchRight = new Cesium.Cartesian3();
-      const localCam = new Cesium.Cartesian3();
-      const localDir = new Cesium.Cartesian3();
-      let cameraRange = 900;
+      let cameraRange = 500;
+      let lightingEnabled = true;
 
       let orbitPhase = 0;
       let orbitRate = 0;
@@ -428,9 +473,7 @@
           return issOrientation(orbitPhase, result);
         }, false),
         model: {
-          uri: "./iss.glb",
-          minimumPixelSize: 48,
-          maximumScale: 20000,
+          uri: "./iss-cesium.glb",
           scale: 1.0,
           runAnimations: false,
           shadows: Cesium.ShadowMode.ENABLED,
@@ -444,50 +487,37 @@
           style: Cesium.LabelStyle.FILL_AND_OUTLINE,
           pixelOffset: new Cesium.Cartesian2(0, -28),
           disableDepthTestDistance: Number.POSITIVE_INFINITY,
-          scaleByDistance: new Cesium.NearFarScalar(80, 1.0, 8.0e5, 0.0),
+          scaleByDistance: new Cesium.NearFarScalar(1500, 0.0, 1.2e4, 1.0),
         },
       });
 
-      function applyLimbCamera() {
+      function bakeCameraToWorld() {
+        Cesium.Cartesian3.clone(viewer.camera.positionWC, scratchCam);
+        Cesium.Cartesian3.clone(viewer.camera.directionWC, scratchDir);
+        Cesium.Cartesian3.clone(viewer.camera.upWC, scratchUp);
+        Cesium.Cartesian3.clone(viewer.camera.rightWC, scratchRight);
         viewer.camera.lookAtTransform(Cesium.Matrix4.IDENTITY);
+        Cesium.Cartesian3.clone(scratchCam, viewer.camera.position);
+        Cesium.Cartesian3.clone(scratchDir, viewer.camera.direction);
+        Cesium.Cartesian3.clone(scratchUp, viewer.camera.up);
+        Cesium.Cartesian3.clone(scratchRight, viewer.camera.right);
+      }
+
+      function applyLimbCamera() {
         const pos = issPosition(orbitPhase, scratchPos);
         const enu = Cesium.Transforms.eastNorthUpToFixedFrame(
           pos,
           Cesium.Ellipsoid.WGS84,
           scratchEnu,
         );
-        localCam.x = cameraRange;
-        localCam.y = cameraRange * 0.08;
-        localCam.z = cameraRange * 0.18;
-        const camPos = Cesium.Matrix4.multiplyByPoint(
+        viewer.camera.lookAtTransform(
           enu,
-          localCam,
-          scratchCam,
+          new Cesium.HeadingPitchRange(
+            Cesium.Math.toRadians(0),
+            Cesium.Math.toRadians(-18),
+            cameraRange,
+          ),
         );
-        const lookPitch = Cesium.Math.toRadians(-21);
-        localDir.x = -Math.cos(lookPitch);
-        localDir.y = 0.0;
-        localDir.z = Math.sin(lookPitch);
-        const lookDir = Cesium.Matrix4.multiplyByPointAsVector(
-          enu,
-          localDir,
-          scratchDir,
-        );
-        Cesium.Cartesian3.normalize(lookDir, lookDir);
-        const up = Cesium.Matrix4.multiplyByPointAsVector(
-          enu,
-          Cesium.Cartesian3.UNIT_Z,
-          scratchUp,
-        );
-        Cesium.Cartesian3.normalize(up, up);
-        const right = Cesium.Cartesian3.cross(lookDir, up, scratchRight);
-        Cesium.Cartesian3.normalize(right, right);
-        Cesium.Cartesian3.cross(right, lookDir, up);
-        Cesium.Cartesian3.normalize(up, up);
-        Cesium.Cartesian3.clone(camPos, viewer.camera.position);
-        Cesium.Cartesian3.clone(lookDir, viewer.camera.direction);
-        Cesium.Cartesian3.clone(up, viewer.camera.up);
-        Cesium.Cartesian3.clone(right, viewer.camera.right);
       }
 
       function applyEarthCamera() {
@@ -508,7 +538,7 @@
         document.getElementById("btnLimb").classList.toggle("active", mode === "limb");
         document.getElementById("btnEarth").classList.toggle("active", mode === "earth");
         document.getElementById("btnFree").classList.toggle("active", mode === "free");
-        scene.screenSpaceCameraController.enableInputs = mode !== "limb";
+        scene.screenSpaceCameraController.enableInputs = true;
         if (mode === "limb") {
           viewer.trackedEntity = undefined;
           applyLimbCamera();
@@ -516,7 +546,7 @@
           applyEarthCamera();
         } else {
           viewer.trackedEntity = undefined;
-          viewer.camera.lookAtTransform(Cesium.Matrix4.IDENTITY);
+          bakeCameraToWorld();
         }
       }
 
@@ -529,9 +559,6 @@
           const deg = Cesium.Math.toDegrees(orbitPhase);
           document.getElementById("orbitPhase").value = String(deg);
           document.getElementById("orbitPhaseValue").textContent = deg.toFixed(1);
-        }
-        if (cameraMode === "limb") {
-          applyLimbCamera();
         }
       });
 
@@ -550,17 +577,11 @@
       bindRange("localHour", setLocalSolarTime, 2);
       bindRange("camRange", (value) => {
         cameraRange = value;
-        if (cameraMode === "limb") {
-          applyLimbCamera();
-        }
       }, 0);
       bindRange(
         "orbitPhase",
         (deg) => {
           orbitPhase = Cesium.Math.toRadians(deg);
-          if (cameraMode === "limb") {
-            applyLimbCamera();
-          }
         },
         1,
       );
@@ -617,6 +638,41 @@
       document.getElementById("btnFree").addEventListener("click", () => {
         setCameraMode("free");
       });
+
+      const controlsEl = document.getElementById("controls");
+      const btnTogglePanel = document.getElementById("btnTogglePanel");
+      btnTogglePanel.addEventListener("click", () => {
+        const collapsed = controlsEl.classList.toggle("collapsed");
+        btnTogglePanel.textContent = collapsed ? "+" : "−";
+        btnTogglePanel.title = collapsed ? "展开面板" : "折叠面板";
+        btnTogglePanel.setAttribute("aria-expanded", String(!collapsed));
+      });
+
+      const btnLighting = document.getElementById("btnLighting");
+      function setLightingEnabled(enabled) {
+        lightingEnabled = enabled;
+        globe.enableLighting = enabled;
+        globe.dynamicAtmosphereLighting = enabled;
+        globe.dynamicAtmosphereLightingFromSun = enabled;
+        if (scene.atmosphere && Cesium.DynamicAtmosphereLightingType) {
+          scene.atmosphere.dynamicLighting = enabled
+            ? Cesium.DynamicAtmosphereLightingType.SUNLIGHT
+            : Cesium.DynamicAtmosphereLightingType.NONE;
+        }
+        viewer.shadows = enabled;
+        viewer.terrainShadows = enabled
+          ? Cesium.ShadowMode.ENABLED
+          : Cesium.ShadowMode.DISABLED;
+        iss.model.shadows = enabled
+          ? Cesium.ShadowMode.ENABLED
+          : Cesium.ShadowMode.DISABLED;
+        btnLighting.classList.toggle("active", enabled);
+        btnLighting.textContent = enabled ? "光照:开" : "光照:关";
+      }
+      btnLighting.addEventListener("click", () => {
+        setLightingEnabled(!lightingEnabled);
+      });
+      setLightingEnabled(true);
 
       setCameraMode("limb");
     </script>

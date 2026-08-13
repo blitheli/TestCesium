@@ -33,7 +33,7 @@ CesiumJS 本身已包含开源大气散射, 不必再找第三方插件作为第
 
 该包是 Eric Bruneton Precomputed Atmospheric Scattering 的 Three.js 实现, 使用预计算 LUT 和多次散射, 视觉上比 Cesium 单次散射更接近照片(尤其是 ISS 前景 + 地球边缘). Storybook `Atmosphere-LightingMask` 把 ISS 放在经度 -110, 纬度 45, 高度 408 km, 地方时约 17:00, 用于拍晨昏线.
 
-ISS 模型路径: `storybook/assets/iss.glb`(Git LFS), 来源为 NASA International Space Station 3D Model. 本目录已下载该 glb.
+ISS 模型路径: `storybook/assets/iss.glb`(Git LFS), 来源为 NASA International Space Station 3D Model. 本目录保留原始压缩文件 `iss.glb`. Cesium 1.140 对 `KHR_mesh_quantization` + `EXT_meshopt_compression` 的包围盒/顶点尺度会出错, 因此另存解量化后的 `iss-cesium.glb`(约 112 m × 69 m × 59 m, JPEG 贴图)供页面加载.
 
 ## 为何不把 Bruneton 整套搬进 Cesium
 
@@ -66,9 +66,14 @@ ISS 模型路径: `storybook/assets/iss.glb`(Git LFS), 来源为 NASA Internatio
    - 姿态用位置-速度旋转, 使模型沿轨道朝向.
 
 4. 相机
-   - 默认"边缘视角": 在 ISS 东侧约 900 m, 略抬高, 向西俯视地平线. 地球边缘大气占画面主体, ISS 在前景.
-   - 使用世界坐标写入 `camera.position / direction / up`, 先 `lookAtTransform(IDENTITY)`, 避免局部变换把相机锁在模型内部.
-   - 另提供全地球视角(约 22000 km 俯视)和自由相机.
+   - 默认"边缘视角": 以 ISS 为原点 `lookAtTransform(ENU)` + HeadingPitchRange(0°, -18°, 500 m), 从北侧略俯视整站, 便于看到帆板投射到舱体上的硬阴影. 鼠标在该参考系内绕 ISS 旋转缩放.
+   - 自由相机把姿态烘焙回世界坐标. 全地球视角约 22000 km 俯视.
+
+5. 面板交互
+   - 标题栏右侧 `−` / `+` 折叠或展开控制面板.
+   - `光照:开/关` 对应官方 Shadows 示例: `viewer.shadows` + entity `ShadowMode.ENABLED` + `terrainShadows`.
+   - 阴影走 Viewer 默认级联阴影图, `shadowMap.maximumDistance = 10000`, `size = 2048`, 软阴影关闭. 相机在 ISS 附近(数百米到数公里)时, ISS 落在 10 km 阴影范围内, 地球在 408 km 外不抢 cascade.
+   - 不再自建正交 ShadowMap, 也不改 darkness / IBL / lightColor, 让模型用和 Cesium Air 示例相同的默认 PBR 光照.
 
 ## 验证
 
@@ -78,7 +83,7 @@ python -m http.server 8000
 
 打开 `http://localhost:8000/AtmosAngLight/atmosAngLight.html`.
 
-- 默认边缘视角: ISS 在前景, 地球弯曲地平线在背景, 边缘有蓝白色气辉.
+- 默认边缘视角: 相机在 ISS 北侧约 500 m, 能看到帆板和舱体; 帆板/桁架应在舱体上投下近黑、边缘清晰的硬阴影; 鼠标绕 ISS 旋转缩放.
 - 全地球视角: 能看到北美和晨昏线, 向阳一侧有蓝色大气光晕.
 - 拖动"地方时", 晨昏线颜色应明显变化.
 - 拖动"轨道相位"或播放轨道, 边缘厚度和颜色随视角变化.
