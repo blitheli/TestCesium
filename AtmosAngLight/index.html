@@ -1,0 +1,632 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>AtmosAngLight Debug</title>
+  <script src="https://cesium.com/downloads/cesiumjs/releases/1.140/Build/Cesium/Cesium.js"></script>
+  <link href="https://cesium.com/downloads/cesiumjs/releases/1.140/Build/Cesium/Widgets/widgets.css" rel="stylesheet">
+  <style>
+    html, body, #cesiumContainer {
+      width: 100%; height: 100%; margin: 0; padding: 0; overflow: hidden;
+    }
+
+    #debugPanel {
+      position: absolute;
+      top: 12px;
+      left: 12px;
+      z-index: 10;
+      width: 320px;
+      max-height: calc(100% - 80px);
+      overflow: auto;
+      padding: 12px 14px;
+      border-radius: 10px;
+      background: rgba(18, 22, 32, 0.82);
+      color: #eef2ff;
+      font: 12px/1.45 sans-serif;
+      box-shadow: 0 8px 24px rgba(0, 0, 0, 0.35);
+    }
+
+    #debugPanel.collapsed #debugBody {
+      display: none;
+    }
+
+    #debugPanel .header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 8px;
+      margin-bottom: 8px;
+    }
+
+    #debugPanel h1 {
+      margin: 0;
+      font-size: 14px;
+      font-weight: 600;
+    }
+
+    #debugPanel .section {
+      margin-top: 10px;
+    }
+
+    #debugPanel .section-title {
+      margin: 0 0 6px;
+      color: #9aa7b8;
+      font-size: 11px;
+      letter-spacing: 0.04em;
+      text-transform: uppercase;
+    }
+
+    #debugPanel .buttons {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 6px;
+    }
+
+    #debugPanel button {
+      border: 1px solid rgba(255, 255, 255, 0.18);
+      background: rgba(255, 255, 255, 0.08);
+      color: #fff;
+      border-radius: 6px;
+      padding: 6px 10px;
+      cursor: pointer;
+      font-size: 12px;
+    }
+
+    #debugPanel button:hover {
+      background: rgba(255, 255, 255, 0.14);
+    }
+
+    #debugPanel button.active {
+      border-color: rgba(85, 214, 190, 0.8);
+      background: rgba(85, 214, 190, 0.22);
+    }
+
+    #debugPanel button.toggle {
+      width: 28px;
+      height: 28px;
+      padding: 0;
+      flex: 0 0 auto;
+    }
+
+    #debugPanel .row {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      margin: 6px 0;
+    }
+
+    #debugPanel .row label {
+      width: 88px;
+      color: #c5cee0;
+      flex: 0 0 auto;
+    }
+
+    #debugPanel .row input[type="range"] {
+      flex: 1;
+      min-width: 0;
+    }
+
+    #debugPanel .value {
+      width: 56px;
+      text-align: right;
+      color: #d2d9ff;
+      font-variant-numeric: tabular-nums;
+      flex: 0 0 auto;
+    }
+
+    #debugStatus {
+      margin-top: 10px;
+      padding-top: 8px;
+      border-top: 1px solid rgba(255, 255, 255, 0.12);
+      color: #9aa7b8;
+      font-size: 11px;
+      white-space: pre-wrap;
+      font-variant-numeric: tabular-nums;
+    }
+  </style>
+</head>
+<body>
+  <div id="cesiumContainer"></div>
+  <div id="debugPanel">
+    <div class="header">
+      <h1>调试面板</h1>
+      <button id="btnTogglePanel" class="toggle" type="button" title="折叠面板">−</button>
+    </div>
+    <div id="debugBody">
+      <div class="section">
+        <div class="section-title">Cesium 调试</div>
+        <div class="buttons">
+          <button id="btnFps" class="active" type="button">FPS:开</button>
+          <button id="btnInspector" type="button">Inspector</button>
+        </div>
+      </div>
+
+      <div class="section">
+        <div class="section-title">相机</div>
+        <div class="buttons">
+          <button id="btnIss" class="active" type="button">ISS 视角</button>
+          <button id="btnEarth" type="button">全地球</button>
+          <button id="btnNadir" type="button">俯视地表</button>
+          <button id="btnFree" type="button">自由相机</button>
+        </div>
+      </div>
+
+      <div class="section">
+        <div class="section-title">光照 / 大气</div>
+        <div class="buttons">
+          <button id="btnLighting" class="active" type="button">光照:开</button>
+          <button id="btnSkyAtmo" class="active" type="button">天空大气</button>
+          <button id="btnGroundAtmo" class="active" type="button">地面大气</button>
+          <button id="btnHdr" class="active" type="button">HDR</button>
+          <button id="btnShadows" class="active" type="button">阴影</button>
+          <button id="btnHd" class="active" type="button">高清</button>
+        </div>
+      </div>
+
+      <div class="section">
+        <div class="section-title">昼夜淡入淡出</div>
+        <div class="buttons">
+          <button id="btnFadeNear" class="active" type="button">近距保黑</button>
+          <button id="btnFadeDefault" type="button">Cesium默认</button>
+          <button id="btnFadeFar" type="button">远距才黑</button>
+        </div>
+      </div>
+
+      <div class="section">
+        <div class="section-title">大气光强</div>
+        <div class="row">
+          <label for="skyIntensity">天空光强</label>
+          <input id="skyIntensity" type="range" min="5" max="120" step="1" value="50">
+          <span class="value" id="skyIntensityValue">50</span>
+        </div>
+        <div class="row">
+          <label for="groundIntensity">地面光强</label>
+          <input id="groundIntensity" type="range" min="1" max="80" step="1" value="5">
+          <span class="value" id="groundIntensityValue">5</span>
+        </div>
+        <div class="row">
+          <label for="camRange">ISS距离(m)</label>
+          <input id="camRange" type="range" min="200" max="50000" step="50" value="1800">
+          <span class="value" id="camRangeValue">1800</span>
+        </div>
+      </div>
+
+      <div id="debugStatus">初始化中...</div>
+    </div>
+  </div>
+
+  <script type="module">
+
+    Cesium.Ion.defaultAccessToken = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJqdGkiOiI4M2ZhYzM4My1lN2NhLTRjNTktODY1OC1jZDdmOTU3Y2ZjMGEiLCJpZCI6MTMwNTAsInNjb3BlcyI6WyJhc3IiLCJnYyJdLCJpYXQiOjE1NjI0NzA5NzB9.rRTs6chsWJdo9KNYe5VjJj2fUzMHeniIJvFQOd0aLJU';
+
+    const ISS_LON = -110;
+    const ISS_LAT = 45;
+    const ISS_ALTITUDE = 400000;
+    const REFERENCE_DATE = Date.UTC(2022, 4, 30);
+
+    const viewer = new Cesium.Viewer('cesiumContainer', {
+      terrain: Cesium.Terrain.fromWorldTerrain(),
+      shadows: true,
+      terrainShadows: Cesium.ShadowMode.ENABLED,
+      useBrowserRecommendedResolution: false,
+      shouldAnimate: false,
+      msaaSamples: 4,
+      baseLayerPicker: true,
+      geocoder: true,
+    });
+    window.viewer = viewer;
+
+    const scene = viewer.scene;
+    const globe = scene.globe;
+    const skyAtmosphere = scene.skyAtmosphere;
+
+    scene.highDynamicRange = true;
+    scene.fxaa = true;
+    scene.fog.enabled = false;
+    scene.skyBox.show = true;
+    scene.sun.show = true;
+    scene.moon.show = true;
+    scene.logarithmicDepthBuffer = true;
+
+    globe.enableLighting = true;
+    globe.showGroundAtmosphere = true;
+    globe.dynamicAtmosphereLighting = true;
+    globe.dynamicAtmosphereLightingFromSun = true;
+    globe.atmosphereLightIntensity = 5.0;
+    globe.lightingFadeOutDistance = 0.0;
+    globe.lightingFadeInDistance = 1.0e5;
+    globe.nightFadeOutDistance = 0.0;
+    globe.nightFadeInDistance = 1.0e5;
+    globe.baseColor = Cesium.Color.fromBytes(2, 6, 14, 255);
+    // vertexShadowDarkness 是夜侧环境光加项(lambert≈0 时夜侧亮度≈该值).
+    // 越大夜半球越亮; 要很暗必须压到接近 0.
+    globe.vertexShadowDarkness = 0.02;
+    globe.lambertDiffuseMultiplier = 0.9;
+
+    skyAtmosphere.show = true;
+    skyAtmosphere.perFragmentAtmosphere = true;
+    skyAtmosphere.atmosphereLightIntensity = 50.0;
+
+    if (scene.atmosphere && Cesium.DynamicAtmosphereLightingType) {
+      scene.atmosphere.dynamicLighting =
+        Cesium.DynamicAtmosphereLightingType.SUNLIGHT;
+    }
+
+    // 全局太阳光保持常亮, 地球向阳面才正常; ISS 黑夜只压模型光
+    scene.light = new Cesium.SunLight({ intensity: 1.0 });
+
+    const shadowMap = viewer.shadowMap;
+    shadowMap.size = 2048;
+    shadowMap.softShadows = true;
+    shadowMap.darkness = 0.1;
+    shadowMap.maximumDistance = 1000.0;
+
+    // Cesium 内置 FPS 叠加层 (右上角)
+    scene.debugShowFramesPerSecond = true;
+    let inspectorLoaded = false;
+
+    function setLocalSolarTime(localHour) {
+      const utcHour = localHour - ISS_LON / 15;
+      const dayMs = REFERENCE_DATE + utcHour * 3600 * 1000;
+      viewer.clock.currentTime = Cesium.JulianDate.fromDate(new Date(dayMs));
+    }
+    setLocalSolarTime(17);
+
+    const dayStart = Cesium.JulianDate.fromDate(new Date(REFERENCE_DATE));
+    const dayStop = Cesium.JulianDate.addDays(
+      dayStart,
+      2,
+      new Cesium.JulianDate()
+    );
+    viewer.clock.startTime = dayStart.clone();
+    viewer.clock.stopTime = dayStop.clone();
+    viewer.clock.clockRange = Cesium.ClockRange.LOOP_STOP;
+    viewer.timeline.zoomTo(dayStart, dayStop);
+
+    const issPosition = Cesium.Cartesian3.fromDegrees(
+      ISS_LON,
+      ISS_LAT,
+      ISS_ALTITUDE
+    );
+    const issEnu = Cesium.Transforms.eastNorthUpToFixedFrame(issPosition);
+    const iss = viewer.entities.add({
+      position: issPosition,
+      model: {
+        uri: '/model/iss-cesium.glb',
+        scale: 1.0,
+        shadows: Cesium.ShadowMode.ENABLED,
+        lightColor: new Cesium.Cartesian3(1.0, 1.0, 1.0),
+        imageBasedLightingFactor: new Cesium.Cartesian2(1.0, 1.0),
+        color: Cesium.Color.WHITE,
+        colorBlendMode: Cesium.ColorBlendMode.HIGHLIGHT,
+        colorBlendAmount: 0.0,
+      },
+      label: {
+        text: '空间站',
+        font: '18px sans-serif',
+        fillColor: Cesium.Color.WHITE,
+        outlineColor: Cesium.Color.BLACK,
+        outlineWidth: 2,
+        style: Cesium.LabelStyle.FILL_AND_OUTLINE,
+        pixelOffset: new Cesium.Cartesian2(0, -28),
+        disableDepthTestDistance: Number.POSITIVE_INFINITY,
+      },
+    });
+
+    let cameraMode = 'iss';
+    let cameraRange = 1800;
+    let lightingEnabled = true;
+    let fadeMode = 'near';
+
+    // dayFactor: 1=白昼, 0=黑夜. 12~17 保持为昼, 约 19 点后才进夜侧
+    function dayFactorFromLocalHour(hour) {
+      const elev = Math.cos(((hour - 12) / 12) * Math.PI);
+      return Cesium.Math.clamp((elev + 0.15) / 0.3, 0, 1);
+    }
+
+    function updateDayNightLighting(localHour) {
+      // 只按 ISS 地方时压暗模型. 不可改 scene.light / 全球 atmosphereBrightness,
+      // 否则 Home/全地球视角下整颗地球都会变黑.
+      const day = dayFactorFromLocalHour(localHour);
+
+      scene.light = new Cesium.SunLight({ intensity: 2.0 });
+      globe.atmosphereBrightnessShift = 0.0;
+      globe.atmosphereSaturationShift = 0.0;
+      skyAtmosphere.brightnessShift = 0.0;
+      globe.vertexShadowDarkness = 0.02;
+
+      // 白天/黄昏: 正常外观. 仅明确夜侧才压暗 (含自发光贴图)
+      if (day > 0.2) {
+        iss.model.lightColor = new Cesium.Cartesian3(1.0, 1.0, 1.0);
+        iss.model.imageBasedLightingFactor = new Cesium.Cartesian2(1.0, 1.0);
+        iss.model.color = Cesium.Color.WHITE;
+        iss.model.colorBlendMode = Cesium.ColorBlendMode.HIGHLIGHT;
+        iss.model.colorBlendAmount = 0.0;
+      } else {
+        const t = day / 0.2;
+        const modelLight = 0.02 * t;
+        iss.model.lightColor = new Cesium.Cartesian3(
+          modelLight,
+          modelLight,
+          modelLight
+        );
+        iss.model.imageBasedLightingFactor = new Cesium.Cartesian2(0.0, 0.0);
+        iss.model.color = Cesium.Color.BLACK;
+        iss.model.colorBlendMode = Cesium.ColorBlendMode.MIX;
+        iss.model.colorBlendAmount = 0.92 * (1.0 - t);
+      }
+    }
+
+    const scratchCam = new Cesium.Cartesian3();
+    const scratchDir = new Cesium.Cartesian3();
+    const scratchUp = new Cesium.Cartesian3();
+    const scratchRight = new Cesium.Cartesian3();
+
+    function bakeCameraToWorld() {
+      Cesium.Cartesian3.clone(viewer.camera.positionWC, scratchCam);
+      Cesium.Cartesian3.clone(viewer.camera.directionWC, scratchDir);
+      Cesium.Cartesian3.clone(viewer.camera.upWC, scratchUp);
+      Cesium.Cartesian3.clone(viewer.camera.rightWC, scratchRight);
+      viewer.camera.lookAtTransform(Cesium.Matrix4.IDENTITY);
+      Cesium.Cartesian3.clone(scratchCam, viewer.camera.position);
+      Cesium.Cartesian3.clone(scratchDir, viewer.camera.direction);
+      Cesium.Cartesian3.clone(scratchUp, viewer.camera.up);
+      Cesium.Cartesian3.clone(scratchRight, viewer.camera.right);
+    }
+
+    function applyIssCamera() {
+      viewer.camera.lookAtTransform(
+        issEnu,
+        new Cesium.HeadingPitchRange(0, Cesium.Math.toRadians(28), cameraRange)
+      );
+    }
+
+    function applyEarthCamera() {
+      viewer.camera.lookAtTransform(Cesium.Matrix4.IDENTITY);
+      viewer.camera.setView({
+        destination: Cesium.Cartesian3.fromDegrees(ISS_LON, ISS_LAT, 2.2e7),
+        orientation: {
+          heading: 0,
+          pitch: Cesium.Math.toRadians(-90),
+          roll: 0,
+        },
+      });
+    }
+
+    function applyNadirCamera() {
+      viewer.camera.lookAtTransform(Cesium.Matrix4.IDENTITY);
+      viewer.camera.setView({
+        destination: Cesium.Cartesian3.fromDegrees(ISS_LON, ISS_LAT, 8.0e5),
+        orientation: {
+          heading: 0,
+          pitch: Cesium.Math.toRadians(-90),
+          roll: 0,
+        },
+      });
+    }
+
+    function setCameraMode(mode) {
+      cameraMode = mode;
+      document.getElementById('btnIss').classList.toggle('active', mode === 'iss');
+      document.getElementById('btnEarth').classList.toggle('active', mode === 'earth');
+      document.getElementById('btnNadir').classList.toggle('active', mode === 'nadir');
+      document.getElementById('btnFree').classList.toggle('active', mode === 'free');
+      scene.screenSpaceCameraController.enableInputs = true;
+      if (mode === 'iss') {
+        applyIssCamera();
+      } else if (mode === 'earth') {
+        applyEarthCamera();
+      } else if (mode === 'nadir') {
+        applyNadirCamera();
+      } else {
+        bakeCameraToWorld();
+      }
+      updateStatus();
+    }
+
+    function setLightingEnabled(enabled) {
+      lightingEnabled = enabled;
+      globe.enableLighting = enabled;
+      globe.dynamicAtmosphereLighting = enabled;
+      globe.dynamicAtmosphereLightingFromSun = enabled;
+      if (scene.atmosphere && Cesium.DynamicAtmosphereLightingType) {
+        scene.atmosphere.dynamicLighting = enabled
+          ? Cesium.DynamicAtmosphereLightingType.SUNLIGHT
+          : Cesium.DynamicAtmosphereLightingType.NONE;
+      }
+      viewer.shadows = enabled;
+      viewer.terrainShadows = enabled
+        ? Cesium.ShadowMode.ENABLED
+        : Cesium.ShadowMode.DISABLED;
+      iss.model.shadows = enabled
+        ? Cesium.ShadowMode.ENABLED
+        : Cesium.ShadowMode.DISABLED;
+      const btn = document.getElementById('btnLighting');
+      btn.classList.toggle('active', enabled);
+      btn.textContent = enabled ? '光照:开' : '光照:关';
+      updateStatus();
+    }
+
+    function setFadeMode(mode) {
+      fadeMode = mode;
+      if (mode === 'near') {
+        globe.lightingFadeOutDistance = 0.0;
+        globe.lightingFadeInDistance = 1.0e5;
+        globe.nightFadeOutDistance = 0.0;
+        globe.nightFadeInDistance = 1.0e5;
+      } else if (mode === 'default') {
+        const r = globe.ellipsoid.minimumRadius;
+        globe.lightingFadeOutDistance = 0.5 * Math.PI * r;
+        globe.lightingFadeInDistance = Math.PI * r;
+        globe.nightFadeOutDistance = 0.5 * Math.PI * r;
+        globe.nightFadeInDistance = 2.5 * Math.PI * r;
+      } else {
+        // 远距才黑: 复现"拉近变亮"问题
+        globe.lightingFadeOutDistance = 2.0e7;
+        globe.lightingFadeInDistance = 3.0e7;
+        globe.nightFadeOutDistance = 2.0e7;
+        globe.nightFadeInDistance = 3.0e7;
+      }
+      document.getElementById('btnFadeNear').classList.toggle('active', mode === 'near');
+      document.getElementById('btnFadeDefault').classList.toggle('active', mode === 'default');
+      document.getElementById('btnFadeFar').classList.toggle('active', mode === 'far');
+      updateStatus();
+    }
+
+    function getLocalHourFromJulianDate(julianDate) {
+      const date = Cesium.JulianDate.toDate(julianDate);
+      const utcHours =
+        date.getUTCHours() +
+        date.getUTCMinutes() / 60 +
+        date.getUTCSeconds() / 3600;
+      let local = utcHours + ISS_LON / 15;
+      local = ((local % 24) + 24) % 24;
+      return local;
+    }
+
+    function updateStatus() {
+      const carto = Cesium.Cartographic.fromCartesian(viewer.camera.positionWC);
+      const heightKm = (carto.height / 1000).toFixed(1);
+      const lon = Cesium.Math.toDegrees(carto.longitude).toFixed(2);
+      const lat = Cesium.Math.toDegrees(carto.latitude).toFixed(2);
+      const time = Cesium.JulianDate.toIso8601(viewer.clock.currentTime, 0);
+      const localHour = getLocalHourFromJulianDate(viewer.clock.currentTime);
+      document.getElementById('debugStatus').textContent =
+        `相机: ${lon}°, ${lat}°, h=${heightKm} km\n` +
+        `模式: ${cameraMode} | fade: ${fadeMode}\n` +
+        `地方时: ${localHour.toFixed(2)} h\n` +
+        `lightFade: ${globe.lightingFadeOutDistance.toExponential(1)} / ${globe.lightingFadeInDistance.toExponential(1)}\n` +
+        `nightFade: ${globe.nightFadeOutDistance.toExponential(1)} / ${globe.nightFadeInDistance.toExponential(1)}\n` +
+        `UTC: ${time}`;
+    }
+
+    // UI bindings
+    document.getElementById('btnTogglePanel').addEventListener('click', () => {
+      const panel = document.getElementById('debugPanel');
+      const collapsed = panel.classList.toggle('collapsed');
+      document.getElementById('btnTogglePanel').textContent = collapsed ? '+' : '−';
+    });
+
+    document.getElementById('btnFps').addEventListener('click', () => {
+      const enabled = !scene.debugShowFramesPerSecond;
+      scene.debugShowFramesPerSecond = enabled;
+      const btn = document.getElementById('btnFps');
+      btn.classList.toggle('active', enabled);
+      btn.textContent = enabled ? 'FPS:开' : 'FPS:关';
+    });
+
+    document.getElementById('btnInspector').addEventListener('click', () => {
+      if (!inspectorLoaded) {
+        viewer.extend(Cesium.viewerCesiumInspectorMixin);
+        inspectorLoaded = true;
+      }
+      const inspector = viewer.cesiumInspector;
+      if (!inspector) {
+        return;
+      }
+      const container = inspector.container;
+      const visible = container.style.display !== 'none';
+      container.style.display = visible ? 'none' : 'block';
+      document.getElementById('btnInspector').classList.toggle('active', !visible);
+    });
+
+    document.getElementById('btnIss').addEventListener('click', () => setCameraMode('iss'));
+    document.getElementById('btnEarth').addEventListener('click', () => setCameraMode('earth'));
+    document.getElementById('btnNadir').addEventListener('click', () => setCameraMode('nadir'));
+    document.getElementById('btnFree').addEventListener('click', () => setCameraMode('free'));
+
+    document.getElementById('btnLighting').addEventListener('click', () => {
+      setLightingEnabled(!lightingEnabled);
+    });
+
+    function bindToggle(id, getState, setState, labelOn, labelOff) {
+      const btn = document.getElementById(id);
+      btn.addEventListener('click', () => {
+        const next = !getState();
+        setState(next);
+        btn.classList.toggle('active', next);
+        if (labelOn && labelOff) {
+          btn.textContent = next ? labelOn : labelOff;
+        }
+        updateStatus();
+      });
+    }
+
+    bindToggle(
+      'btnSkyAtmo',
+      () => skyAtmosphere.show,
+      (v) => { skyAtmosphere.show = v; }
+    );
+    bindToggle(
+      'btnGroundAtmo',
+      () => globe.showGroundAtmosphere,
+      (v) => { globe.showGroundAtmosphere = v; }
+    );
+    bindToggle(
+      'btnHdr',
+      () => scene.highDynamicRange,
+      (v) => { scene.highDynamicRange = v; }
+    );
+    bindToggle(
+      'btnShadows',
+      () => viewer.shadows,
+      (v) => {
+        viewer.shadows = v;
+        viewer.terrainShadows = v
+          ? Cesium.ShadowMode.ENABLED
+          : Cesium.ShadowMode.DISABLED;
+        iss.model.shadows = v
+          ? Cesium.ShadowMode.ENABLED
+          : Cesium.ShadowMode.DISABLED;
+      }
+    );
+    bindToggle(
+      'btnHd',
+      () => !viewer.useBrowserRecommendedResolution,
+      (v) => { viewer.useBrowserRecommendedResolution = !v; },
+      '高清',
+      '低清'
+    );
+
+    document.getElementById('btnFadeNear').addEventListener('click', () => setFadeMode('near'));
+    document.getElementById('btnFadeDefault').addEventListener('click', () => setFadeMode('default'));
+    document.getElementById('btnFadeFar').addEventListener('click', () => setFadeMode('far'));
+
+    document.getElementById('skyIntensity').addEventListener('input', (e) => {
+      const v = Number(e.target.value);
+      skyAtmosphere.atmosphereLightIntensity = v;
+      document.getElementById('skyIntensityValue').textContent = String(v);
+      updateStatus();
+    });
+    document.getElementById('groundIntensity').addEventListener('input', (e) => {
+      const v = Number(e.target.value);
+      globe.atmosphereLightIntensity = v;
+      document.getElementById('groundIntensityValue').textContent = String(v);
+      updateStatus();
+    });
+    document.getElementById('camRange').addEventListener('input', (e) => {
+      cameraRange = Number(e.target.value);
+      document.getElementById('camRangeValue').textContent = String(cameraRange);
+      if (cameraMode === 'iss') {
+        applyIssCamera();
+      }
+      updateStatus();
+    });
+
+    scene.postRender.addEventListener(() => {
+      updateDayNightLighting(
+        getLocalHourFromJulianDate(viewer.clock.currentTime)
+      );
+      updateStatus();
+    });
+
+    setFadeMode('near');
+    setLightingEnabled(true);
+    setCameraMode('iss');
+    setLocalSolarTime(17);
+    updateDayNightLighting(17);
+
+  </script>
+</body>
+</html>
