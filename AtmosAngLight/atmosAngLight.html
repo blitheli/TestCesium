@@ -125,6 +125,18 @@
         <button id="btnFree" type="button">自由相机</button>
       </div>
       <div class="row">
+        <label for="camRange">相机距离(m)</label>
+        <input
+          id="camRange"
+          type="range"
+          min="120"
+          max="4000"
+          step="10"
+          value="900"
+        />
+        <span class="value" id="camRangeValue">900</span>
+      </div>
+      <div class="row">
         <label for="localHour">地方时(h)</label>
         <input
           id="localHour"
@@ -283,6 +295,7 @@
         timeline: true,
         shadows: true,
       });
+      window.viewer = viewer;
 
       const scene = viewer.scene;
       const globe = scene.globe;
@@ -317,6 +330,11 @@
       scene.light = new Cesium.SunLight({
         intensity: 2.0,
       });
+      globe.baseColor = Cesium.Color.fromBytes(8, 24, 56, 255);
+      globe.lightingFadeOutDistance = 2.0e7;
+      globe.lightingFadeInDistance = 3.0e7;
+      globe.nightFadeOutDistance = 2.0e7;
+      globe.nightFadeInDistance = 3.0e7;
 
       const scratchQuat = new Cesium.Quaternion();
       const scratchMat3 = new Cesium.Matrix3();
@@ -327,9 +345,10 @@
       const scratchCam = new Cesium.Cartesian3();
       const scratchDir = new Cesium.Cartesian3();
       const scratchUp = new Cesium.Cartesian3();
-      const scratchProj = new Cesium.Cartesian3();
-      const limbOffsetEnu = new Cesium.Cartesian3(-240, -70, 48);
-      const limbLookEnu = new Cesium.Cartesian3(-0.82, -0.12, -0.56);
+      const scratchRight = new Cesium.Cartesian3();
+      const localCam = new Cesium.Cartesian3();
+      const localDir = new Cesium.Cartesian3();
+      let cameraRange = 900;
 
       let orbitPhase = 0;
       let orbitRate = 0;
@@ -430,50 +449,57 @@
       });
 
       function applyLimbCamera() {
+        viewer.camera.lookAtTransform(Cesium.Matrix4.IDENTITY);
         const pos = issPosition(orbitPhase, scratchPos);
         const enu = Cesium.Transforms.eastNorthUpToFixedFrame(
           pos,
           Cesium.Ellipsoid.WGS84,
           scratchEnu,
         );
+        localCam.x = cameraRange;
+        localCam.y = cameraRange * 0.08;
+        localCam.z = cameraRange * 0.18;
         const camPos = Cesium.Matrix4.multiplyByPoint(
           enu,
-          limbOffsetEnu,
+          localCam,
           scratchCam,
         );
+        const lookPitch = Cesium.Math.toRadians(-21);
+        localDir.x = -Math.cos(lookPitch);
+        localDir.y = 0.0;
+        localDir.z = Math.sin(lookPitch);
         const lookDir = Cesium.Matrix4.multiplyByPointAsVector(
           enu,
-          limbLookEnu,
+          localDir,
           scratchDir,
         );
         Cesium.Cartesian3.normalize(lookDir, lookDir);
-        const up = Cesium.Cartesian3.normalize(pos, scratchUp);
-        const along = Cesium.Cartesian3.multiplyByScalar(
-          lookDir,
-          Cesium.Cartesian3.dot(up, lookDir),
-          scratchProj,
+        const up = Cesium.Matrix4.multiplyByPointAsVector(
+          enu,
+          Cesium.Cartesian3.UNIT_Z,
+          scratchUp,
         );
-        Cesium.Cartesian3.subtract(up, along, up);
         Cesium.Cartesian3.normalize(up, up);
-        viewer.camera.setView({
-          destination: camPos,
-          orientation: {
-            direction: lookDir,
-            up: up,
-          },
-        });
+        const right = Cesium.Cartesian3.cross(lookDir, up, scratchRight);
+        Cesium.Cartesian3.normalize(right, right);
+        Cesium.Cartesian3.cross(right, lookDir, up);
+        Cesium.Cartesian3.normalize(up, up);
+        Cesium.Cartesian3.clone(camPos, viewer.camera.position);
+        Cesium.Cartesian3.clone(lookDir, viewer.camera.direction);
+        Cesium.Cartesian3.clone(up, viewer.camera.up);
+        Cesium.Cartesian3.clone(right, viewer.camera.right);
       }
 
       function applyEarthCamera() {
         viewer.trackedEntity = undefined;
-        viewer.camera.flyTo({
-          destination: Cesium.Cartesian3.fromDegrees(ISS_LON, ISS_LAT, 1.8e7),
+        viewer.camera.lookAtTransform(Cesium.Matrix4.IDENTITY);
+        viewer.camera.setView({
+          destination: Cesium.Cartesian3.fromDegrees(ISS_LON, ISS_LAT, 2.2e7),
           orientation: {
             heading: 0,
             pitch: Cesium.Math.toRadians(-90),
             roll: 0,
           },
-          duration: 1.2,
         });
       }
 
@@ -490,6 +516,7 @@
           applyEarthCamera();
         } else {
           viewer.trackedEntity = undefined;
+          viewer.camera.lookAtTransform(Cesium.Matrix4.IDENTITY);
         }
       }
 
@@ -521,6 +548,12 @@
       }
 
       bindRange("localHour", setLocalSolarTime, 2);
+      bindRange("camRange", (value) => {
+        cameraRange = value;
+        if (cameraMode === "limb") {
+          applyLimbCamera();
+        }
+      }, 0);
       bindRange(
         "orbitPhase",
         (deg) => {
