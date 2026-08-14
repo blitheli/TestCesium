@@ -203,6 +203,7 @@
 
     const viewer = new Cesium.Viewer('cesiumContainer', {
       terrain: Cesium.Terrain.fromWorldTerrain(),
+      // 阴影
       shadows: true,
       terrainShadows: Cesium.ShadowMode.ENABLED,
       useBrowserRecommendedResolution: false,
@@ -225,7 +226,7 @@
     scene.moon.show = true;
     scene.logarithmicDepthBuffer = true;
 
-    globe.enableLighting = true;
+    globe.enableLighting = true;    //  地球光照实现亮暗半球效果。注意：和entity的model没有关系,需要单独设置
     globe.showGroundAtmosphere = true;
     globe.dynamicAtmosphereLighting = true;
     globe.dynamicAtmosphereLightingFromSun = true;
@@ -254,9 +255,10 @@
 
     const shadowMap = viewer.shadowMap;
     shadowMap.size = 2048;
-    shadowMap.softShadows = true;
+    shadowMap.softShadows = false;
     shadowMap.darkness = 0.1;
-    shadowMap.maximumDistance = 1000.0;
+    // 默认相机距模型 1800 m. 1000 m 会让模型落到级联阴影范围外.
+    shadowMap.maximumDistance = 10000.0;
 
     // Cesium 内置 FPS 叠加层 (右上角)
     scene.debugShowFramesPerSecond = true;
@@ -277,6 +279,14 @@
     if (dataSource.clock) {
       viewer.timeline.zoomTo(dataSource.clock.startTime, dataSource.clock.stopTime);
     }
+    if (Cesium.Transforms.preloadIcrfFixed) {
+      await Cesium.Transforms.preloadIcrfFixed(
+        new Cesium.TimeInterval({
+          start: viewer.clock.startTime,
+          stop: viewer.clock.stopTime,
+        })
+      );
+    }
 
     const iss = dataSource.entities.getById('Satellite/ISS');
     if (!iss) {
@@ -288,7 +298,20 @@
     const scratchIssDir = new Cesium.Cartesian3();
     const scratchSunIcrf = new Cesium.Cartesian3();
     const scratchSunFixed = new Cesium.Cartesian3();
+    const scratchToSun = new Cesium.Cartesian3();
+    const scratchSurface = new Cesium.Cartesian3();
     const scratchCarto = new Cesium.Cartographic();
+    const scratchRay = new Cesium.Ray();
+    // 太阳视半径约 0.267°. 日心过地球边缘后短过渡进本影.
+    const SUN_RADIUS_RAD = Cesium.Math.toRadians(0.2666);
+    const SUNSET_FADE_RAD = Cesium.Math.toRadians(1.0);
+    const TWILIGHT_IBL_START_DEG = 30.0;
+    const TWILIGHT_IBL_END_DEG = 5.0;
+    const TWILIGHT_IBL_MIN = 0.3;
+    let lastDayFactor = 1;
+    let lastSunElevDeg = 0;
+    let lastIssAltKm = 0;
+    let lastIblFactor = 1;
 
     let cameraMode = 'iss';
     let cameraRange = 1800;
@@ -310,57 +333,102 @@
       return Cesium.Cartographic.fromCartesian(pos, globe.ellipsoid, scratchCarto);
     }
 
-    // dayFactor: 1=白昼, 0=黑夜. 由 ISS 地固位置与太阳方向夹角决定.
+    // dayFactor: 1=太阳可见, 0=地影.
+    // 必须用 ISS 地心距 r=R+h, 视地球半径 asin(R/r). 地面晨昏线是 90°,
+    // ISS(~400 km) 上地球视半径约 70°, 太阳还可在地球边缘以上约 20° 时才被挡住.
     function dayFactorFromIssSun(time) {
       const issPos = getIssPosition(time, scratchIssPos);
       if (!issPos) {
-        return 1;
+        return lastDayFactor;
       }
       const icrfToFixed = Cesium.Transforms.computeIcrfToFixedMatrix(time);
       if (!Cesium.defined(icrfToFixed)) {
-        return 1;
+        return lastDayFactor;
       }
       Cesium.Simon1994PlanetaryPositions.computeSunPositionInEarthInertialFrame(
         time,
         scratchSunIcrf
       );
       Cesium.Matrix3.multiplyByVector(icrfToFixed, scratchSunIcrf, scratchSunFixed);
-      Cesium.Cartesian3.normalize(scratchSunFixed, scratchSunFixed);
+      Cesium.Cartesian3.subtract(scratchSunFixed, issPos, scratchToSun);
+      if (Cesium.Cartesian3.magnitudeSquared(scratchToSun) < 1.0) {
+        return lastDayFactor;
+      }
+      Cesium.Cartesian3.normalize(scratchToSun, scratchToSun);
+
+      const r = Cesium.Cartesian3.magnitude(issPos);
+      const surface = globe.ellipsoid.scaleToGeodeticSurface(issPos, scratchSurface);
+      if (!Cesium.defined(surface)) {
+        return lastDayFactor;
+      }
+      const earthR = Cesium.Cartesian3.magnitude(surface);
+      const issAlt = r - earthR;
+      lastIssAltKm = issAlt / 1000;
+      // 视地球半角: 从 ISS 看地球圆盘. h 越大地球越小, 日落越晚.
+      const limbFromNadir = Math.asin(Cesium.Math.clamp(earthR / r, 0, 1));
+
       Cesium.Cartesian3.normalize(issPos, scratchIssDir);
-      const cosSun = Cesium.Cartesian3.dot(scratchIssDir, scratchSunFixed);
-      return Cesium.Math.clamp((cosSun + 0.15) / 0.3, 0, 1);
+      const cosFromZenith = Cesium.Math.clamp(
+        Cesium.Cartesian3.dot(scratchIssDir, scratchToSun),
+        -1,
+        1
+      );
+      const angleFromNadir = Math.acos(-cosFromZenith);
+      const elev = angleFromNadir - limbFromNadir;
+      lastSunElevDeg = Cesium.Math.toDegrees(elev);
+
+      // 椭球射线: 日地连线是否穿过 WGS84(含 ISS 真实高度).
+      Cesium.Cartesian3.clone(issPos, scratchRay.origin);
+      Cesium.Cartesian3.clone(scratchToSun, scratchRay.direction);
+      const hit = Cesium.IntersectionTests.rayEllipsoid(scratchRay, globe.ellipsoid);
+      const blocked = Cesium.defined(hit) && hit.start > 0.0;
+
+      // 日心仍高出地球边缘(含太阳视半径), 或射线未击中椭球: 全亮.
+      // 挡住后再短过渡, 不把半影提前成黑夜.
+      const day = (elev >= -SUN_RADIUS_RAD || !blocked)
+        ? 1
+        : Cesium.Math.clamp(
+          (elev + SUN_RADIUS_RAD + SUNSET_FADE_RAD) / SUNSET_FADE_RAD,
+          0,
+          1
+        );
+      lastDayFactor = day;
+      return day;
     }
 
     function updateDayNightLighting(time) {
-      // 只按 ISS 相对太阳的方位压暗模型. 不可改 scene.light / 全球 atmosphereBrightness,
+      // 只按 ISS 是否被地球挡住太阳来压暗模型. 不可改 scene.light / 全球 atmosphereBrightness,
       // 否则 Home/全地球视角下整颗地球都会变黑.
       const day = dayFactorFromIssSun(time);
+      const t = day * day * (3.0 - 2.0 * day);
 
-      scene.light = new Cesium.SunLight({ intensity: 2.0 });
       globe.atmosphereBrightnessShift = 0.0;
       globe.atmosphereSaturationShift = 0.0;
       skyAtmosphere.brightnessShift = 0.0;
       globe.vertexShadowDarkness = 0.02;
 
-      if (day > 0.2) {
-        iss.model.lightColor = new Cesium.Cartesian3(1.0, 1.0, 1.0);
-        iss.model.imageBasedLightingFactor = new Cesium.Cartesian2(1.0, 1.0);
-        iss.model.color = Cesium.Color.WHITE;
-        iss.model.colorBlendMode = Cesium.ColorBlendMode.HIGHLIGHT;
-        iss.model.colorBlendAmount = 0.0;
-      } else {
-        const t = day / 0.2;
-        const modelLight = 0.02 * t;
-        iss.model.lightColor = new Cesium.Cartesian3(
-          modelLight,
-          modelLight,
-          modelLight
-        );
-        iss.model.imageBasedLightingFactor = new Cesium.Cartesian2(0.0, 0.0);
-        iss.model.color = Cesium.Color.BLACK;
-        iss.model.colorBlendMode = Cesium.ColorBlendMode.MIX;
-        iss.model.colorBlendAmount = 0.92 * (1.0 - t);
+      // 太阳可见时方向光保持 1. IBL 在傍晚降到保底值, 避免把掠射阴影填平;
+      // 不降到 0, 否则当前 glTF 的未受光面会整体发黑.
+      const modelLight = Cesium.Math.lerp(0.02, 1.0, t);
+      let visibleIbl = TWILIGHT_IBL_MIN;
+      if (lastSunElevDeg >= TWILIGHT_IBL_START_DEG) {
+        visibleIbl = 1.0;
+      } else if (lastSunElevDeg > TWILIGHT_IBL_END_DEG) {
+        const u =
+          (lastSunElevDeg - TWILIGHT_IBL_END_DEG) /
+          (TWILIGHT_IBL_START_DEG - TWILIGHT_IBL_END_DEG);
+        const smoothU = u * u * (3.0 - 2.0 * u);
+        visibleIbl = Cesium.Math.lerp(TWILIGHT_IBL_MIN, 1.0, smoothU);
       }
+      const ibl = visibleIbl * t;
+      lastIblFactor = ibl;
+      iss.model.lightColor = new Cesium.Cartesian3(modelLight, modelLight, modelLight);
+      iss.model.imageBasedLightingFactor = new Cesium.Cartesian2(ibl, ibl);
+
+      // 始终 MIX, 白昼 amount=0, 避免 HIGHLIGHT/MIX 切换时闪亮.
+      iss.model.color = Cesium.Color.BLACK;
+      iss.model.colorBlendMode = Cesium.ColorBlendMode.MIX;
+      iss.model.colorBlendAmount = 0.92 * (1.0 - t) * (1.0 - t);
     }
 
     const scratchCam = new Cesium.Cartesian3();
@@ -513,6 +581,7 @@
       document.getElementById('debugStatus').textContent =
         `相机: ${lon}°, ${lat}°, h=${heightKm} km\n` +
         issLine +
+        `太阳高出地球边缘: ${lastSunElevDeg.toFixed(2)}° | ISS h=${lastIssAltKm.toFixed(1)} km | day=${lastDayFactor.toFixed(3)} | IBL=${lastIblFactor.toFixed(2)}\n` +
         `模式: ${cameraMode} | fade: ${fadeMode}\n` +
         `lightFade: ${globe.lightingFadeOutDistance.toExponential(1)} / ${globe.lightingFadeInDistance.toExponential(1)}\n` +
         `nightFade: ${globe.nightFadeOutDistance.toExponential(1)} / ${globe.nightFadeInDistance.toExponential(1)}\n` +
@@ -625,6 +694,7 @@
     });
     document.getElementById('camRange').addEventListener('input', (e) => {
       cameraRange = Number(e.target.value);
+      shadowMap.maximumDistance = Math.max(10000.0, cameraRange * 2.0);
       document.getElementById('camRangeValue').textContent = String(cameraRange);
       if (cameraMode === 'iss') {
         applyIssCamera();
@@ -632,8 +702,10 @@
       updateStatus();
     });
 
-    scene.postRender.addEventListener(() => {
+    scene.preRender.addEventListener(() => {
       updateDayNightLighting(viewer.clock.currentTime);
+    });
+    scene.postRender.addEventListener(() => {
       updateStatus();
     });
 

@@ -90,10 +90,15 @@ ISS 模型路径: `storybook/assets/iss.glb`(Git LFS), 来源为 NASA Internatio
    - 页面: `import getCzmlData from './czmlData.js'`, `viewer.dataSources.add(Cesium.CzmlDataSource.load(getCzmlData()))`.
    - `viewer.clockTrackedDataSource` 对齐 CZML 时钟(2022-04-18T04:00Z 起 7200 s, multiplier 60, LOOP_STOP).
    - 用 `dataSource.entities.getById('Satellite/ISS')` 取实体; 不设置 orientation, 使用 Cesium 默认姿态.
-   - 模型 `gltf: /model/iss-cesium.glb`, 阴影 ENABLED.
+   - 当前模型 `gltf: /model/hubble-cesium.glb`, 阴影 ENABLED.
+   - 原始 `hubble.glb` 的 17 个材质中 16 个省略 `metallicFactor`; glTF 默认值为 1, 会让模型几乎全金属并由 IBL/镜面主导, 方向光和自阴影对比很弱. `hubble-cesium.glb` 保留原模型并将这些材质明确设为 `metallicFactor: 0`.
 
 3. 昼夜与相机
-   - 模型昼夜改为 ISS 地固位置与太阳方向夹角(`Simon1994PlanetaryPositions` + ICRF→ECEF), 不再用地方时近似.
+   - 模型昼夜按 ISS 视线相对地球视圆盘边缘(地影/掩日), 不是地心 `cosSun>=0`. ISS 高度上地心晨昏线处太阳仍高出边缘约 20°.
+   - `preloadIcrfFixed`; ICRF 矩阵未就绪时保持上一帧 dayFactor, 禁止回退成 1(会闪亮再变暗).
+   - 可见性按 ISS 地心距 r=R+h: 地球视半角 asin(R/r)(约 70°, 不是地面 90°), 再加 WGS84 射线检测. 太阳中心高出边缘(含 0.27° 视半径)时主光保持 1, 挡住后再短过渡.
+   - 默认相机距模型 1800 m, 阴影图 `maximumDistance` 不可小于该距离; 从 1000 m 修正为 10000 m, 距离滑条按 `max(10000, 2*cameraRange)` 更新. 关闭软阴影, 避免掠射时 PCF 进一步抹淡阴影.
+   - 傍晚 IBL 在太阳高出地球边缘 30°→5° 时从 1 平滑降到 0.3, 保留 glTF 基础可见度并减少环境光填平自阴影; 进影后再随 dayFactor 降至 0.
    - ISS 视角用 `viewer.zoomTo(iss, HeadingPitchRange)` 一次性对准, 不每帧 lookAt 跟随, 避免暂停时相机仍旋转.
    - 全地球/俯视对准当前星下点. 距离滑条再次调用 zoomTo.
 

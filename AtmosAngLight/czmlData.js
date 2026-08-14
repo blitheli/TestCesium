@@ -883,7 +883,7 @@ function getCzmlData() {
       description: "国际空间站",
       position: positionData,
       model: {
-        gltf: "/model/iss-cesium.glb",
+        gltf: "/model/hubble-cesium.glb",
         scale: 1.0,
         shadows: "ENABLED",
         lightColor: { rgbaf: [1.0, 1.0, 1.0, 1.0] },
