@@ -75,11 +75,40 @@ ISS 模型路径: `storybook/assets/iss.glb`(Git LFS), 来源为 NASA Internatio
    - 阴影走 Viewer 默认级联阴影图, `shadowMap.maximumDistance = 10000`, `size = 2048`, 软阴影关闭. 相机在 ISS 附近(数百米到数公里)时, ISS 落在 10 km 阴影范围内, 地球在 408 km 外不抢 cascade.
    - 不再自建正交 ShadowMap, 也不改 darkness / IBL / lightColor, 让模型用和 Cesium Air 示例相同的默认 PBR 光照.
 
+## index.html: 去掉固定 entity, 从 czmlData.js 加载 CZML
+
+调试页 `index.html` 不再用 `viewer.entities.add` 放固定经纬高 ISS, 也不再用地方时推太阳/昼夜.
+
+1. 删除地方时与固定位置
+   - 去掉 `ISS_LON` / `ISS_LAT` / `ISS_ALTITUDE` / `REFERENCE_DATE`.
+   - 去掉 `setLocalSolarTime`, `dayFactorFromLocalHour`, `getLocalHourFromJulianDate`.
+   - 状态栏改为显示当前 ISS 地固经纬高, 不再显示地方时.
+
+2. CZML 加载
+   - `czmlData.js` 导出 `getCzmlData()`, 返回完整 CZML 包: document clock + `Satellite/ISS`.
+   - 星历: `epoch` + `cartesianVelocity`(t, x, y, z, vx, vy, vz), `referenceFrame: INERTIAL`, Lagrange 5 阶.
+   - 页面: `import getCzmlData from './czmlData.js'`, `viewer.dataSources.add(Cesium.CzmlDataSource.load(getCzmlData()))`.
+   - `viewer.clockTrackedDataSource` 对齐 CZML 时钟(2022-04-18T04:00Z 起 7200 s, multiplier 60, LOOP_STOP).
+   - 用 `dataSource.entities.getById('Satellite/ISS')` 取实体; 不设置 orientation, 使用 Cesium 默认姿态.
+   - 模型 `gltf: /model/iss-cesium.glb`, 阴影 ENABLED.
+
+3. 昼夜与相机
+   - 模型昼夜改为 ISS 地固位置与太阳方向夹角(`Simon1994PlanetaryPositions` + ICRF→ECEF), 不再用地方时近似.
+   - ISS 视角用 `viewer.zoomTo(iss, HeadingPitchRange)` 一次性对准, 不每帧 lookAt 跟随, 避免暂停时相机仍旋转.
+   - 全地球/俯视对准当前星下点. 距离滑条再次调用 zoomTo.
+
 ## 验证
 
 ```
 python -m http.server 8000
 ```
+
+打开 `http://localhost:8000/AtmosAngLight/index.html`.
+
+- ISS 沿 `czmlData.js` 星历运动, 状态栏经纬高随时钟变化.
+- 点 ISS 视角用 zoomTo 对准模型, 暂停时相机不再自行旋转; 全地球/俯视对准当前星下点.
+- 播放时间轴时太阳与晨昏线随真实历元变化, 无地方时控件.
+- 夜侧 ISS 模型变暗, 向阳面地球大气正常.
 
 打开 `http://localhost:8000/AtmosAngLight/atmosAngLight.html`.
 
