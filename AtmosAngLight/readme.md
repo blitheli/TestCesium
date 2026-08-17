@@ -61,6 +61,19 @@ diffuseIntensity = clamp(lambert * lambertDiffuseMultiplier + vertexShadowDarkne
 
 ISS 在级联阴影范围内时, 帆板/桁架可在舱体上投下阴影。地球在数百公里外, 通常不抢近景 cascade。
 
+#### 轨道相机下阴影会被 Cesium 提前关掉
+
+`ShadowMap.checkVisibility()` 用 `dot(geodeticSurfaceNormal(相机位置), 光照方向)` 判断光源有效性:
+
+| `dot` | Cesium 行为 |
+| --- | --- |
+| `< 0.1` | `_darkness` 由 `darkness` 抬向 `1.0`, 阴影淡出 |
+| `< 0` | `_outOfView = true`, 整张阴影图停用 |
+
+这假设相机在地面(太阳低于水平面就是天黑)。相机跟着卫星在约 400 km 高度时, 地球视半角只有约 70°, 太阳还要再落约 19.7° 才被地球边缘挡住, 中间这段会出现"仍在阳照区却没有阴影"。
+
+`fadingEnabled = false` 只能挡住淡出, 挡不住 `dot < 0` 的停用。本页做法: 只要卫星还看得见太阳, 就在 `shadowMap.update()` 期间把 `frameState.mapProjection` 换成"地表法线 = 太阳方向"的椭球代理, 让判据恒为 `dot = 1`, 用完立刻还原。细节见 `plan.md`。
+
 ### 模型昼夜(地影需手写)
 
 Cesium **不会**自动把实体放进地球本影。ISS 在地理夜侧时, 太阳平行光仍可能照亮模型。
