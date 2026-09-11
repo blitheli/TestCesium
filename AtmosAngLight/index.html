@@ -161,6 +161,7 @@
           <button id="btnHdr" class="active" type="button">HDR</button>
           <button id="btnShadows" class="active" type="button">阴影</button>
           <button id="btnHd" class="active" type="button">高清</button>
+          <button id="btnOrbitShadow" class="active" type="button">轨道地平线</button>
         </div>
       </div>
 
@@ -308,15 +309,22 @@
     const TWILIGHT_IBL_START_DEG = 30.0;
     const TWILIGHT_IBL_END_DEG = 5.0;
     const TWILIGHT_IBL_MIN = 0.3;
+    // 太阳贴近地球边缘时方向光只轻微变弱, 保证阴影对比不丢.
+    const TWILIGHT_DIRECT_START_DEG = 25.0;
+    const TWILIGHT_DIRECT_END_DEG = 0.0;
+    const TWILIGHT_DIRECT_MIN = 0.8;
     let lastDayFactor = 1;
     let lastSunElevDeg = 0;
     let lastIssAltKm = 0;
     let lastIblFactor = 1;
+    // scratchToSun 只有算过一次才可用于阴影地平线代理.
+    let sunDirectionValid = false;
 
     let cameraMode = 'iss';
     let cameraRange = 1800;
     let lightingEnabled = true;
     let fadeMode = 'near';
+    let orbitShadowHorizon = true;
 
     function getIssPosition(time, result) {
       if (!iss.position) {
@@ -355,6 +363,7 @@
         return lastDayFactor;
       }
       Cesium.Cartesian3.normalize(scratchToSun, scratchToSun);
+      sunDirectionValid = true;
 
       const r = Cesium.Cartesian3.magnitude(issPos);
       const surface = globe.ellipsoid.scaleToGeodeticSurface(issPos, scratchSurface);
@@ -396,6 +405,48 @@
       return day;
     }
 
+    // Cesium 级联阴影用"相机脚下的地平线"判断光源是否还有效:
+    // ShadowMap.checkVisibility() 取 dot = geodeticSurfaceNormal(相机位置)·光照方向,
+    // dot < 0.1 时把 shadowMap._darkness 抬向 1(阴影逐渐消失), dot < 0 时直接 _outOfView.
+    // 该判据只对地面相机成立. 相机随 ISS 在约 400 km 高度时, 地球视半角只有约 70°,
+    // 太阳要落到本地水平面下约 20° 才真正被地球挡住. 本例 04:28:29 dot 跌破 0.1,
+    // 04:30:00 dot 转负, 而真正进地影是 04:35 左右, 中间这 6 分钟阴影被错误抹掉.
+    // 修正: 只要 ISS 还能看见太阳, 就在 shadowMap.update 期间把 frameState.mapProjection
+    // 换成一个"地表法线 = 太阳方向"的椭球代理, 让判据恒为 dot = 1, 其余逻辑保持 Cesium 原样.
+    const shadowEllipsoid = Object.create(scene.mapProjection.ellipsoid);
+    shadowEllipsoid.geodeticSurfaceNormal = function (cartesian, result) {
+      if (!Cesium.defined(result)) {
+        result = new Cesium.Cartesian3();
+      }
+      return Cesium.Cartesian3.clone(scratchToSun, result);
+    };
+    const shadowProjection = { ellipsoid: shadowEllipsoid };
+    const baseShadowMapUpdate = shadowMap.update.bind(shadowMap);
+    shadowMap.update = function (frameState) {
+      if (!orbitShadowHorizon || !sunDirectionValid || lastDayFactor <= 0.0) {
+        return baseShadowMapUpdate(frameState);
+      }
+      const savedProjection = frameState.mapProjection;
+      frameState.mapProjection = shadowProjection;
+      try {
+        return baseShadowMapUpdate(frameState);
+      } finally {
+        frameState.mapProjection = savedProjection;
+      }
+    };
+
+    // elevDeg 从 startDeg 降到 endDeg 时, 返回值由 1 平滑降到 minValue.
+    function twilightRamp(elevDeg, startDeg, endDeg, minValue) {
+      if (elevDeg >= startDeg) {
+        return 1.0;
+      }
+      if (elevDeg <= endDeg) {
+        return minValue;
+      }
+      const u = (elevDeg - endDeg) / (startDeg - endDeg);
+      return Cesium.Math.lerp(minValue, 1.0, u * u * (3.0 - 2.0 * u));
+    }
+
     function updateDayNightLighting(time) {
       // 只按 ISS 是否被地球挡住太阳来压暗模型. 不可改 scene.light / 全球 atmosphereBrightness,
       // 否则 Home/全地球视角下整颗地球都会变黑.
@@ -407,19 +458,21 @@
       skyAtmosphere.brightnessShift = 0.0;
       globe.vertexShadowDarkness = 0.02;
 
-      // 太阳可见时方向光保持 1. IBL 在傍晚降到保底值, 避免把掠射阴影填平;
-      // 不降到 0, 否则当前 glTF 的未受光面会整体发黑.
-      const modelLight = Cesium.Math.lerp(0.02, 1.0, t);
-      let visibleIbl = TWILIGHT_IBL_MIN;
-      if (lastSunElevDeg >= TWILIGHT_IBL_START_DEG) {
-        visibleIbl = 1.0;
-      } else if (lastSunElevDeg > TWILIGHT_IBL_END_DEG) {
-        const u =
-          (lastSunElevDeg - TWILIGHT_IBL_END_DEG) /
-          (TWILIGHT_IBL_START_DEG - TWILIGHT_IBL_END_DEG);
-        const smoothU = u * u * (3.0 - 2.0 * u);
-        visibleIbl = Cesium.Math.lerp(TWILIGHT_IBL_MIN, 1.0, smoothU);
-      }
+      // 太阳可见期间方向光只从 1 轻降到 0.8, 阴影一直在; 进地影后才由 t 迅速压到 0.02.
+      // IBL 在傍晚降到保底值, 避免把掠射阴影填平; 不降到 0, 否则未受光面会整体发黑.
+      const sunsetDirect = twilightRamp(
+        lastSunElevDeg,
+        TWILIGHT_DIRECT_START_DEG,
+        TWILIGHT_DIRECT_END_DEG,
+        TWILIGHT_DIRECT_MIN
+      );
+      const modelLight = Cesium.Math.lerp(0.02, sunsetDirect, t);
+      const visibleIbl = twilightRamp(
+        lastSunElevDeg,
+        TWILIGHT_IBL_START_DEG,
+        TWILIGHT_IBL_END_DEG,
+        TWILIGHT_IBL_MIN
+      );
       const ibl = visibleIbl * t;
       lastIblFactor = ibl;
       iss.model.lightColor = new Cesium.Cartesian3(modelLight, modelLight, modelLight);
@@ -578,10 +631,12 @@
       const issLine = issCarto
         ? `ISS: ${Cesium.Math.toDegrees(issCarto.longitude).toFixed(2)}°, ${Cesium.Math.toDegrees(issCarto.latitude).toFixed(2)}°, h=${(issCarto.height / 1000).toFixed(1)} km\n`
         : 'ISS: 无位置\n';
+      const shadowActive = viewer.shadows && !shadowMap.outOfView;
       document.getElementById('debugStatus').textContent =
         `相机: ${lon}°, ${lat}°, h=${heightKm} km\n` +
         issLine +
         `太阳高出地球边缘: ${lastSunElevDeg.toFixed(2)}° | ISS h=${lastIssAltKm.toFixed(1)} km | day=${lastDayFactor.toFixed(3)} | IBL=${lastIblFactor.toFixed(2)}\n` +
+        `阴影: ${shadowActive ? '生效' : '停用'} | darkness=${shadowMap._darkness.toFixed(2)} | 轨道地平线: ${orbitShadowHorizon ? '开' : '关'}\n` +
         `模式: ${cameraMode} | fade: ${fadeMode}\n` +
         `lightFade: ${globe.lightingFadeOutDistance.toExponential(1)} / ${globe.lightingFadeInDistance.toExponential(1)}\n` +
         `nightFade: ${globe.nightFadeOutDistance.toExponential(1)} / ${globe.nightFadeInDistance.toExponential(1)}\n` +
@@ -674,6 +729,12 @@
       (v) => { viewer.useBrowserRecommendedResolution = !v; },
       '高清',
       '低清'
+    );
+
+    bindToggle(
+      'btnOrbitShadow',
+      () => orbitShadowHorizon,
+      (v) => { orbitShadowHorizon = v; }
     );
 
     document.getElementById('btnFadeNear').addEventListener('click', () => setFadeMode('near'));

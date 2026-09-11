@@ -102,6 +102,65 @@ ISS 模型路径: `storybook/assets/iss.glb`(Git LFS), 来源为 NASA Internatio
    - ISS 视角用 `viewer.zoomTo(iss, HeadingPitchRange)` 一次性对准, 不每帧 lookAt 跟随, 避免暂停时相机仍旋转.
    - 全地球/俯视对准当前星下点. 距离滑条再次调用 zoomTo.
 
+## 04:28:30 起阴影变淡直至消失
+
+现象: 时间轴走到 2022-04-18T04:28:30Z 之后, 模型阴影逐渐变淡, 04:31 已完全看不出阴影, 但此时太阳还没落山(ISS 仍在阳照区), 与实际不符.
+
+### 定位
+
+Cesium 级联阴影在 `ShadowMap.checkVisibility()` 里用"相机脚下的地平线"判断光源是否还有效:
+
+```js
+const surfaceNormal = frameState.mapProjection.ellipsoid.geodeticSurfaceNormal(sceneCamera.positionWC);
+const lightDirection = Cartesian3.negate(shadowMapCamera.directionWC);
+const dot = Cartesian3.dot(surfaceNormal, lightDirection);
+if (shadowMap.fadingEnabled) {
+  const darknessAmount = CesiumMath.clamp(dot / 0.1, 0.0, 1.0);
+  shadowMap._darkness = CesiumMath.lerp(1.0, shadowMap.darkness, darknessAmount);
+}
+if (dot < 0.0) {
+  shadowMap._outOfView = true;
+  shadowMap._needsUpdate = false;
+  return;
+}
+```
+
+即: 太阳落到相机所在点本地水平面上方 5.74°(`dot = 0.1`)以下就开始把 `_darkness` 抬向 1(阴影淡出), 落到水平面以下(`dot < 0`)直接停用整张阴影图.
+
+这套判据默认相机在地面: 地面上太阳低于水平面就是天黑, 没有阴影很合理. 但本页相机跟着 ISS 在约 400 km 高度, 地球视半角只有约 70°, 太阳还要再降约 19.7° 才被地球边缘挡住. 于是出现一段"太阳仍在照, 阴影已经没了"的窗口.
+
+用星历实测(`czmlData.js`, 历元 2022-04-18T04:00:00Z):
+
+| UTC | 太阳本地高度角 | `dot` | Cesium 阴影 | 实际 |
+| --- | --- | --- | --- | --- |
+| 04:28:29 | +5.74° | 0.100 | 开始淡出 | 全阳照 |
+| 04:30:00 | 0.00° | 0.000 | 完全消失 | 全阳照 |
+| 04:35:10 | -19.7° | -0.34 | 已停用 | 才进地影 |
+
+04:28:29 与用户观察到的 04:28:30 完全吻合, 确认根因.
+
+### 修正
+
+只要 ISS 还看得见太阳(`dayFactor > 0`), 就在 `shadowMap.update()` 期间把 `frameState.mapProjection` 换成一个"地表法线 = 太阳方向"的椭球代理, 令 `dot` 恒为 1:
+
+- `Object.create(scene.mapProjection.ellipsoid)` 得到原型代理, 只覆写 `geodeticSurfaceNormal`, 其余方法(`cartesianToCartographic` 等)照旧继承, 不改动共享的 `Ellipsoid.WGS84`.
+- 只在 `shadowMap.update()` 调用期间替换 `frameState.mapProjection`, 调用结束在 `finally` 里还原; `ShadowMap` 之外没有代码在这段时间读它.
+- 进地影后(`dayFactor = 0`)不再覆写, 让 Cesium 按原逻辑停用阴影图, 省掉一趟渲染.
+- 面板加 `轨道地平线` 开关, 关掉即可复现 Cesium 原始行为做对照; 状态栏显示 `阴影: 生效/停用 | darkness=...`.
+
+不采用的方案:
+
+- `shadowMap.fadingEnabled = false`: 只挡住 `_darkness` 淡出, `dot < 0` 仍会 `_outOfView`, 04:30 之后照样没有阴影.
+- 自建正交 `ShadowMap` 只罩住 ISS: 需要自己维护光源相机, 深度偏移和地形阴影, 改动面远大于问题本身.
+
+### 光强曲线
+
+配合"太阳快落山时整体光强略弱, 阴影仍在"的要求, 按太阳高出地球边缘的角度 `lastSunElevDeg` 分两条斜坡:
+
+- 方向光 `lightColor`: 25° → 0° 时由 1.0 平滑降到 0.8. 降幅刻意做小, 保证阴影对比不丢.
+- `imageBasedLightingFactor`: 30° → 5° 时由 1.0 降到 0.3, 减少环境光填平自阴影.
+- 进地影后仍由 `dayFactor` 在约 1° 内把方向光压到 0.02, `colorBlendAmount` 抬到 0.92, 保持原来的快速转黑.
+
 ## 验证
 
 ```
@@ -114,6 +173,9 @@ python -m http.server 8000
 - 点 ISS 视角用 zoomTo 对准模型, 暂停时相机不再自行旋转; 全地球/俯视对准当前星下点.
 - 播放时间轴时太阳与晨昏线随真实历元变化, 无地方时控件.
 - 夜侧 ISS 模型变暗, 向阳面地球大气正常.
+- 时间拖到 04:28:30 - 04:35, 模型阴影应一直在, 只是整体略暗; 状态栏 `阴影: 生效`, `darkness=0.10`.
+- 关闭 `轨道地平线` 后, 04:28:30 起 `darkness` 开始上升, 04:30 之后 `阴影: 停用`, 复现原始问题.
+- 04:35 之后进地影, `day=0.000`, 模型接近全黑, 阴影自然停用.
 
 打开 `http://localhost:8000/AtmosAngLight/atmosAngLight.html`.
 
