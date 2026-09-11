@@ -1,0 +1,120 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <!-- Include the CesiumJS JavaScript and CSS files -->
+  <script src="https://cesium.com/downloads/cesiumjs/releases/1.138/Build/Cesium/Cesium.js"></script>
+  <link href="https://cesium.com/downloads/cesiumjs/releases/1.138/Build/Cesium/Widgets/widgets.css" rel="stylesheet">
+  <style>
+    /* Set the container to fill the entire page */
+    html, body, #cesiumContainer {
+      width: 100%; height: 100%; margin: 0; padding: 0; overflow: hidden;
+    }
+  </style>
+</head>
+<body>
+  <div id="cesiumContainer"></div>
+  <script type="module">
+    // Your access token can be found at: https://ion.cesium.com/tokens.
+    // This is the default access token from your ion account
+
+    Cesium.Ion.defaultAccessToken = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJqdGkiOiI4M2ZhYzM4My1lN2NhLTRjNTktODY1OC1jZDdmOTU3Y2ZjMGEiLCJpZCI6MTMwNTAsInNjb3BlcyI6WyJhc3IiLCJnYyJdLCJpYXQiOjE1NjI0NzA5NzB9.rRTs6chsWJdo9KNYe5VjJj2fUzMHeniIJvFQOd0aLJU';
+
+    // Initialize the Cesium Viewer in the HTML element with the `cesiumContainer` ID.
+    const viewer = new Cesium.Viewer('cesiumContainer', {
+    });
+
+    const scene = viewer.scene;
+
+    // 设置分辨率
+    // 或创建后设置
+   viewer.useBrowserRecommendedResolution = false;  // 按设备物理像素渲染，高分屏更锐利
+
+    /**
+ * 教学示例：几颗「假星」演示 BillboardCollection
+ * 不是拼图，而是：2 张小贴图 × 6 个独立精灵
+ */
+function demoMiniStarfield(viewer) {
+    const scene = viewer.scene;
+    scene.skyBox.show = false;
+    scene.backgroundColor = Cesium.Color.BLACK;
+
+    // ---------- 1) 先做两张很小的图（只做一次，不是每帧）----------
+    // 图 A：软光斑（模仿恒星核）
+    const starSprite = makeSoftDot(64, "white");
+    // 图 B：偏黄的十字，方便看出「另一张图」
+    const crossSprite = makeCross(64, "gold");
+
+    // ---------- 2) 一个 Collection，里面放 6 个 Billboard ----------
+    const stars = new Cesium.BillboardCollection({
+        scene,
+        blendOption: Cesium.BlendOption.TRANSLUCENT
+    });
+
+    // 6 个方向（单位向量），再乘远距离，看起来像「天空上的点」
+    const R = 5e7; // 示例用 5 万 km，真实星空会放到 5e14 m
+    const points = [
+        { dir: [1, 0, 0],  image: starSprite,  imageId: "demo-star",  color: Cesium.Color.WHITE,      size: 16 },
+        { dir: [0, 1, 0],  image: starSprite,  imageId: "demo-star",  color: Cesium.Color.CYAN,       size: 12 },
+        { dir: [0, 0, 1],  image: starSprite,  imageId: "demo-star",  color: Cesium.Color.WHITE.withAlpha(0.35), size: 8 },
+        { dir: [-1, 0.2, 0.3], image: starSprite, imageId: "demo-star", color: Cesium.Color.ORANGE,  size: 20 },
+        { dir: [0.4, -0.7, 0.5], image: crossSprite, imageId: "demo-cross", color: Cesium.Color.YELLOW, size: 24 },
+        { dir: [0.2, 0.3, -1],   image: crossSprite, imageId: "demo-cross", color: Cesium.Color.GOLD,   size: 18 }
+    ];
+
+    for (const p of points) {
+        stars.add({
+            position: new Cesium.Cartesian3(p.dir[0] * R, p.dir[1] * R, p.dir[2] * R),
+            image: p.image,
+            imageId: p.imageId,          // 同 imageId 的共用一张纹理，不会复制 6 份
+            color: p.color,
+            width: p.size,
+            height: p.size,
+            sizeInMeters: false,         // 单位是像素，不随距离变大变小
+            disableDepthTestDistance: Number.POSITIVE_INFINITY
+        });
+    }
+
+    scene.primitives.add(stars);
+    return stars;
+}
+
+/** 画一张 64×64 软点：这就是「小图」本身 */
+function makeSoftDot(size, fill) {
+    const c = document.createElement("canvas");
+    c.width = c.height = size;
+    const g = c.getContext("2d");
+    const r = size / 2;
+    const grad = g.createRadialGradient(r, r, 0, r, r, r);
+    grad.addColorStop(0, fill);
+    grad.addColorStop(0.35, fill);
+    grad.addColorStop(1, "rgba(255,255,255,0)");
+    g.fillStyle = grad;
+    g.fillRect(0, 0, size, size);
+    return c;
+}
+
+function makeCross(size, stroke) {
+    const c = document.createElement("canvas");
+    c.width = c.height = size;
+    const g = c.getContext("2d");
+    g.strokeStyle = stroke;
+    g.lineWidth = 4;
+    g.lineCap = "round";
+    g.beginPath();
+    g.moveTo(size * 0.2, size * 0.5);
+    g.lineTo(size * 0.8, size * 0.5);
+    g.moveTo(size * 0.5, size * 0.2);
+    g.lineTo(size * 0.5, size * 0.8);
+    g.stroke();
+    return c;
+}
+
+// Viewer 建好后：
+demoMiniStarfield(viewer);
+
+  
+
+  </script>
+</body>
+</html>
