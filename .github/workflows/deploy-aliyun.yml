@@ -1,0 +1,160 @@
+# 推送到阿里云 Windows IIS: D:\IIS\TestCesium
+# 用 rclone 按文件大小和修改时间比较, 只上传有变化的文件, 不删除服务器上多出来的文件.
+#
+# 仓库 Secrets:
+#   ALIYUN_HOST       服务器公网 IP 或域名
+#   ALIYUN_USER       Windows 登录名
+#   ALIYUN_SSH_KEY    OpenSSH 私钥 (与 ALIYUN_PASSWORD 二选一)
+#   ALIYUN_PASSWORD   登录密码
+#   ALIYUN_PORT       可选, 默认 22
+#   ALIYUN_HOST_KEY   可选, ssh-keyscan 的整行输出, 用于固定主机密钥
+#
+# 服务器需开启 OpenSSH Server, 安全组放行该端口, 账号对 D:\IIS\TestCesium 有写权限.
+
+name: Deploy to Aliyun IIS
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: deploy-aliyun-iis
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    name: Sync changed files
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    env:
+      ALIYUN_HOST: ${{ secrets.ALIYUN_HOST }}
+      ALIYUN_USER: ${{ secrets.ALIYUN_USER }}
+      ALIYUN_PORT: ${{ secrets.ALIYUN_PORT }}
+      ALIYUN_SSH_KEY: ${{ secrets.ALIYUN_SSH_KEY }}
+      ALIYUN_PASSWORD: ${{ secrets.ALIYUN_PASSWORD }}
+      ALIYUN_HOST_KEY: ${{ secrets.ALIYUN_HOST_KEY }}
+      DEST: /D:/IIS/TestCesium
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Check secrets
+        run: |
+          set -euo pipefail
+          missing=0
+          if [ -z "${ALIYUN_HOST}" ]; then
+            echo "::error::缺少 Secret ALIYUN_HOST"
+            missing=1
+          fi
+          if [ -z "${ALIYUN_USER}" ]; then
+            echo "::error::缺少 Secret ALIYUN_USER"
+            missing=1
+          fi
+          if [ -z "${ALIYUN_SSH_KEY}" ] && [ -z "${ALIYUN_PASSWORD}" ]; then
+            echo "::error::请配置 ALIYUN_SSH_KEY 或 ALIYUN_PASSWORD"
+            missing=1
+          fi
+          if [ "$missing" -ne 0 ]; then
+            echo "在 GitHub 仓库 Settings -> Secrets and variables -> Actions 中添加上述 Secrets 后, 重新运行本工作流."
+            exit 1
+          fi
+          echo "目标 ${ALIYUN_USER}@${ALIYUN_HOST}:${ALIYUN_PORT:-22} -> D:\\IIS\\TestCesium"
+
+      - name: Install rclone
+        run: |
+          set -euo pipefail
+          curl -fsSL -o rclone.zip "https://downloads.rclone.org/v1.75.1/rclone-v1.75.1-linux-amd64.zip"
+          unzip -q rclone.zip
+          sudo install rclone-v1.75.1-linux-amd64/rclone /usr/local/bin/rclone
+          rclone version
+
+      - name: Restore file mtimes from git
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import os
+          import subprocess
+
+          log = subprocess.check_output(
+              [
+                  "git",
+                  "-c",
+                  "core.quotepath=false",
+                  "log",
+                  "--format=format:TS:%ct",
+                  "--name-only",
+              ],
+              text=True,
+              encoding="utf-8",
+              errors="surrogateescape",
+          )
+          seen = set()
+          ts = None
+          updated = 0
+          for line in log.splitlines():
+              if line.startswith("TS:") and line[3:].isdigit():
+                  ts = int(line[3:])
+                  continue
+              if not line or ts is None or line in seen:
+                  continue
+              seen.add(line)
+              if os.path.isfile(line):
+                  os.utime(line, (ts, ts))
+                  updated += 1
+          print(f"restored mtime for {updated} files")
+          PY
+
+      - name: Sync changed files
+        run: |
+          set -euo pipefail
+          PORT="${ALIYUN_PORT:-22}"
+          if [ -z "$PORT" ]; then
+            PORT=22
+          fi
+          mkdir -p "$HOME/.ssh"
+          chmod 700 "$HOME/.ssh"
+          trap 'rm -f /tmp/aliyun_key' EXIT
+
+          if [ -n "${ALIYUN_HOST_KEY}" ]; then
+            printf '%s\n' "$ALIYUN_HOST_KEY" > "$HOME/.ssh/known_hosts"
+          else
+            ssh-keyscan -T 15 -p "$PORT" "$ALIYUN_HOST" > "$HOME/.ssh/known_hosts"
+            echo "主机密钥指纹 (建议写入 Secret ALIYUN_HOST_KEY 以固定):"
+            ssh-keygen -lf "$HOME/.ssh/known_hosts" || true
+          fi
+          chmod 600 "$HOME/.ssh/known_hosts"
+          if [ ! -s "$HOME/.ssh/known_hosts" ]; then
+            echo "::error::没有拿到服务器主机密钥, 请确认 OpenSSH 已启动且安全组放行端口 ${PORT}"
+            exit 1
+          fi
+
+          export RCLONE_SFTP_HOST="$ALIYUN_HOST"
+          export RCLONE_SFTP_USER="$ALIYUN_USER"
+          export RCLONE_SFTP_PORT="$PORT"
+          export RCLONE_SFTP_SHELL_TYPE=cmd
+          export RCLONE_SFTP_DISABLE_HASHCHECK=true
+          export RCLONE_SFTP_KNOWN_HOSTS_FILE="$HOME/.ssh/known_hosts"
+
+          if [ -n "${ALIYUN_SSH_KEY}" ]; then
+            printf '%s\n' "$ALIYUN_SSH_KEY" > /tmp/aliyun_key
+            chmod 600 /tmp/aliyun_key
+            export RCLONE_SFTP_KEY_FILE=/tmp/aliyun_key
+          else
+            export RCLONE_SFTP_PASS="$(rclone obscure "$ALIYUN_PASSWORD")"
+          fi
+
+          rclone mkdir ":sftp:${DEST}"
+          rclone copy ./ ":sftp:${DEST}" \
+            --exclude ".git/**" \
+            --exclude ".github/**" \
+            --retries 3 \
+            --low-level-retries 10 \
+            --stats 30s \
+            --log-level INFO
