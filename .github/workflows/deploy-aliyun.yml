@@ -40,7 +40,7 @@ jobs:
       DEST: /D:/IIS/TestCesium
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
         with:
           fetch-depth: 0
           persist-credentials: false
@@ -70,10 +70,13 @@ jobs:
       - name: Install rclone
         run: |
           set -euo pipefail
+          cd "$RUNNER_TEMP"
           curl -fsSL -o rclone.zip "https://downloads.rclone.org/v1.75.1/rclone-v1.75.1-linux-amd64.zip"
           unzip -q rclone.zip
-          sudo install rclone-v1.75.1-linux-amd64/rclone /usr/local/bin/rclone
-          rclone version
+          mkdir -p "$RUNNER_TEMP/bin"
+          install -m 755 rclone-v1.75.1-linux-amd64/rclone "$RUNNER_TEMP/bin/rclone"
+          echo "$RUNNER_TEMP/bin" >> "$GITHUB_PATH"
+          "$RUNNER_TEMP/bin/rclone" version
 
       - name: Restore file mtimes from git
         run: |
@@ -154,6 +157,7 @@ jobs:
           rclone copy ./ ":sftp:${DEST}" \
             --exclude ".git/**" \
             --exclude ".github/**" \
+            --exclude "rclone*" \
             --retries 3 \
             --low-level-retries 10 \
             --stats 30s \
