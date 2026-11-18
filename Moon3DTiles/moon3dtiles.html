@@ -1,0 +1,315 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>月球 3D Tiles</title>
+    <script src="https://cesium.com/downloads/cesiumjs/releases/1.140/Build/Cesium/Cesium.js"></script>
+    <link
+      href="https://cesium.com/downloads/cesiumjs/releases/1.140/Build/Cesium/Widgets/widgets.css"
+      rel="stylesheet"
+    />
+    <style>
+      html,
+      body,
+      #cesiumContainer {
+        width: 100%;
+        height: 100%;
+        margin: 0;
+        padding: 0;
+        overflow: hidden;
+      }
+
+      #panel {
+        position: absolute;
+        top: 12px;
+        left: 12px;
+        z-index: 10;
+        width: min(340px, calc(100vw - 24px));
+        padding: 12px 14px;
+        border-radius: 8px;
+        background: rgba(16, 18, 24, 0.82);
+        color: #f4f7fb;
+        font-family: "Microsoft YaHei", "PingFang SC", sans-serif;
+        font-size: 13px;
+        line-height: 1.5;
+      }
+
+      #panel h1 {
+        margin: 0 0 6px;
+        font-size: 16px;
+      }
+
+      #panel p {
+        margin: 0 0 10px;
+        color: #c5ceda;
+      }
+
+      #status {
+        margin: 0 0 10px;
+        color: #8ef0d2;
+      }
+
+      #status.error {
+        color: #ffb4b4;
+      }
+
+      .actions {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 8px;
+        margin: 0 0 10px;
+      }
+
+      button {
+        border: 1px solid rgba(255, 255, 255, 0.2);
+        border-radius: 6px;
+        background: rgba(255, 255, 255, 0.08);
+        color: #f4f7fb;
+        font: inherit;
+        padding: 6px 10px;
+        cursor: pointer;
+      }
+
+      button:hover,
+      button:focus-visible {
+        border-color: #8ef0d2;
+        outline: none;
+      }
+
+      #coord {
+        margin: 0;
+        color: #d5deea;
+        font-family: Consolas, "Courier New", monospace;
+        font-size: 12px;
+      }
+    </style>
+  </head>
+  <body>
+    <div id="cesiumContainer"></div>
+    <aside id="panel">
+      <h1>月球 3D Tiles</h1>
+      <p>
+        Cesium Moon, ion asset 2684829. 全球月球表面 3D Tiles, 南极附近影像约 1 m, 地形约 5 m.
+      </p>
+      <p id="status">正在加载 Cesium Moon...</p>
+      <div class="actions">
+        <button type="button" data-place="shackleton">Shackleton</button>
+        <button type="button" data-place="apollo11">Apollo 11</button>
+        <button type="button" data-place="moon">全月</button>
+        <button type="button" id="screenshot">截图</button>
+      </div>
+      <p id="coord">移动鼠标查看月面经纬度</p>
+    </aside>
+    <script type="module">
+      const moon = Cesium.Ellipsoid.MOON;
+      // fromDegrees 默认读 Ellipsoid.default, 必须在创建 Viewer 之前换成月球.
+      Cesium.Ellipsoid.default = moon;
+
+      const places = {
+        shackleton: {
+          lon: 129.78,
+          lat: -89.25,
+          height: 10000,
+          heading: 180,
+          pitch: -12,
+        },
+        apollo11: {
+          lon: 23.47315,
+          lat: 0.25,
+          height: 15000,
+          heading: 0,
+          pitch: -45,
+        },
+        moon: {
+          lon: 0,
+          lat: 0,
+          height: 5000000,
+          heading: 0,
+          pitch: -90,
+        },
+      };
+
+      const statusEl = document.getElementById("status");
+      const coordEl = document.getElementById("coord");
+
+      Cesium.Ion.defaultAccessToken =
+        "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJqdGkiOiI4M2ZhYzM4My1lN2NhLTRjNTktODY1OC1jZDdmOTU3Y2ZjMGEiLCJpZCI6MTMwNTAsInNjb3BlcyI6WyJhc3IiLCJnYyJdLCJpYXQiOjE1NjI0NzA5NzB9.rRTs6chsWJdo9KNYe5VjJj2fUzMHeniIJvFQOd0aLJU";
+
+      const viewer = new Cesium.Viewer("cesiumContainer", {
+        ellipsoid: moon,
+        globe: false,
+        skyAtmosphere: false,
+        skyBox: new Cesium.SkyBox({
+          sources: {
+            positiveX: Cesium.buildModuleUrl("Assets/Textures/SkyBox/tycho2t3_80_px.jpg"),
+            negativeX: Cesium.buildModuleUrl("Assets/Textures/SkyBox/tycho2t3_80_mx.jpg"),
+            positiveY: Cesium.buildModuleUrl("Assets/Textures/SkyBox/tycho2t3_80_py.jpg"),
+            negativeY: Cesium.buildModuleUrl("Assets/Textures/SkyBox/tycho2t3_80_my.jpg"),
+            positiveZ: Cesium.buildModuleUrl("Assets/Textures/SkyBox/tycho2t3_80_pz.jpg"),
+            negativeZ: Cesium.buildModuleUrl("Assets/Textures/SkyBox/tycho2t3_80_mz.jpg"),
+          },
+        }),
+        sceneModePicker: false,
+        baseLayerPicker: false,
+        geocoder: false,
+        animation: false,
+        timeline: false,
+        navigationHelpButton: false,
+        contextOptions: {
+          webgl: {
+            preserveDrawingBuffer: true,
+          },
+        },
+      });
+
+      if (viewer.scene.moon) {
+        viewer.scene.moon.show = false;
+      }
+      viewer.scene.backgroundColor = Cesium.Color.BLACK;
+      viewer.scene.light = new Cesium.SunLight();
+
+      function destination(place) {
+        return Cesium.Cartesian3.fromDegrees(place.lon, place.lat, place.height, moon);
+      }
+
+      const placeStatus = {
+        shackleton: "Shackleton, 南极高分辨率区",
+        apollo11: "Apollo 11, 静海登陆点",
+        moon: "全月",
+      };
+
+      function flyTo(placeId) {
+        const place = places[placeId];
+        viewer.camera.flyTo({
+          destination: destination(place),
+          orientation: {
+            heading: Cesium.Math.toRadians(place.heading),
+            pitch: Cesium.Math.toRadians(place.pitch),
+            roll: 0,
+          },
+          duration: placeId === "moon" ? 2 : 3,
+          complete() {
+            statusEl.classList.remove("error");
+            statusEl.textContent = placeStatus[placeId];
+          },
+        });
+      }
+
+      viewer.camera.setView({
+        destination: destination(places.moon),
+        orientation: {
+          heading: 0,
+          pitch: Cesium.Math.toRadians(-90),
+          roll: 0,
+        },
+      });
+
+      viewer.homeButton.viewModel.command.beforeExecute.addEventListener((event) => {
+        event.cancel = true;
+        flyTo("shackleton");
+      });
+
+      document.querySelectorAll("button[data-place]").forEach((button) => {
+        button.addEventListener("click", () => flyTo(button.dataset.place));
+      });
+
+      document.getElementById("screenshot").addEventListener("click", () => {
+        const remove = viewer.scene.postRender.addEventListener(() => {
+          remove();
+          try {
+            const url = viewer.canvas.toDataURL("image/png");
+            const stamp = new Date().toISOString().replace(/[:.]/g, "-");
+            const link = document.createElement("a");
+            link.href = url;
+            link.download = `moon-3dtiles-${stamp}.png`;
+            link.click();
+            statusEl.classList.remove("error");
+            statusEl.textContent = "已保存当前画面截图";
+          } catch (error) {
+            statusEl.classList.add("error");
+            statusEl.textContent = `截图失败: ${error.message}`;
+            console.error(error);
+          }
+        });
+        viewer.scene.requestRender();
+      });
+
+      function addSite(name, lon, lat, description) {
+        viewer.entities.add({
+          name,
+          position: Cesium.Cartesian3.fromDegrees(lon, lat, 2500, moon),
+          point: {
+            pixelSize: 10,
+            color: Cesium.Color.CYAN,
+            outlineColor: Cesium.Color.BLACK,
+            outlineWidth: 2,
+            disableDepthTestDistance: Number.POSITIVE_INFINITY,
+          },
+          label: {
+            text: name,
+            font: "15px sans-serif",
+            fillColor: Cesium.Color.WHITE,
+            outlineColor: Cesium.Color.BLACK,
+            outlineWidth: 2,
+            style: Cesium.LabelStyle.FILL_AND_OUTLINE,
+            pixelOffset: new Cesium.Cartesian2(0, -18),
+            disableDepthTestDistance: Number.POSITIVE_INFINITY,
+          },
+          description,
+        });
+      }
+
+      addSite(
+        "Shackleton",
+        129.78,
+        -89.67,
+        "Shackleton crater, lunar south pole. Cesium Moon uses about 1 m imagery and about 5 m terrain inside 87.5S-90S.",
+      );
+      addSite(
+        "Apollo 11",
+        23.47315,
+        0.67416,
+        "Tranquility Base. Mid-latitude Cesium Moon imagery is about 100 m and terrain about 59 m.",
+      );
+
+      const handler = new Cesium.ScreenSpaceEventHandler(viewer.scene.canvas);
+      handler.setInputAction((movement) => {
+        if (!viewer.scene.pickPositionSupported) {
+          return;
+        }
+        const cartesian = viewer.scene.pickPosition(movement.endPosition);
+        if (!Cesium.defined(cartesian)) {
+          return;
+        }
+        const cartographic = moon.cartesianToCartographic(cartesian);
+        if (!Cesium.defined(cartographic)) {
+          return;
+        }
+        const lon = Cesium.Math.toDegrees(cartographic.longitude).toFixed(3);
+        const lat = Cesium.Math.toDegrees(cartographic.latitude).toFixed(3);
+        coordEl.textContent = `lon ${lon}, lat ${lat}, h ${cartographic.height.toFixed(0)} m`;
+      }, Cesium.ScreenSpaceEventType.MOUSE_MOVE);
+
+      try {
+        const tileset = await Cesium.Cesium3DTileset.fromIonAssetId(2684829);
+        viewer.scene.primitives.add(tileset);
+        statusEl.textContent = "Cesium Moon 已加入场景, 正在飞向 Shackleton";
+        let flewIn = false;
+        const goToSite = () => {
+          if (flewIn) {
+            return;
+          }
+          flewIn = true;
+          flyTo("shackleton");
+        };
+        tileset.initialTilesLoaded.addEventListener(goToSite);
+        window.setTimeout(goToSite, 4000);
+      } catch (error) {
+        statusEl.classList.add("error");
+        statusEl.textContent = `Cesium Moon 加载失败: ${error.message}`;
+        console.error(error);
+      }
+    </script>
+  </body>
+</html>
