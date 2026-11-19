@@ -1,0 +1,123 @@
+# 500 km SSO 相机像面
+
+## 目标
+
+在浏览器里复现 `extract_fov_tiles.py --mode image`: 矩形透视相机与 WGS84 椭球求交, 把 XYZ/TMS 瓦片重采样成一张透视照片. 这不是光照或大气渲染.
+
+默认场景是一颗高度 500 km 的太阳同步圆轨道卫星, 相机对地 (天底). 卫星随 Cesium 时间运动, 可定格位置后再拍照.
+
+## 轨道根数
+
+圆轨道地心半径取 WGS84 半长轴加测地高. 赤道上测地高等于 500 km. 高纬因椭球扁率, 测地高会略大, 这是地心圆轨道的结果, 不是另设一条等高轨道.
+
+常数:
+
+- `a = 6378137 + 500000 = 6878137 m`
+- `e = 0`
+- `mu = 3.986004418e14 m^3/s^2` (WGS84 GM)
+- `J2 = 1.08262668355e-3`
+- 平均太阳角运动 `n_sun = 2*pi / (365.2421897 * 86400)`
+
+J2 升交点进动 (e = 0):
+
+```
+n = sqrt(mu / a^3)
+dOmega/dt = -1.5 * n * J2 * (Re/a)^2 * cos(i)
+```
+
+令 `dOmega/dt = n_sun`, 得
+
+```
+cos(i) = - n_sun / (1.5 * n * J2 * (Re/a)^2)
+i = 97.40180772°
+```
+
+核对: 代回后的进动是 `0.98564736 °/天`, 与 `360/365.2421897` 一致.
+
+其他根数:
+
+- 历元 `2026-03-21T00:00:00Z` (JD 2461120.5)
+- 历元纬度幅角 `u0 = 0` (升交点)
+- 近地点幅角无定义, 取 0
+- 周期 `5676.978 s` (94.616 min)
+- 平均运动 `n = 0.00110678345 rad/s`
+
+LTAN 10:30 用太阳赤经定义, 不用钟面 `UTC + 经度/15` (两者差一个时差方程):
+
+```
+alpha = 低精度太阳赤经 (平黄经 + 中心差, 再投影到赤道)
+Omega0 = alpha(历元) - 22.5°
+```
+
+22.5° 是 12:00 与 10:30 的 1.5 小时. 算得 `Omega0 = 337.855607°`. 历元 LTAN 精确为 10:30.
+
+之后 `Omega(t) = Omega0 + n_sun * (t - t0)`, 与平均太阳一起走. 用真太阳赤经回算时, 1 天后约 10:30:18, 365 天后回到约 10:30. 季节偏差来自赤经速率不等于平黄经速率, 年平均仍是太阳同步.
+
+ECI 到 ECEF 用 IAU 1982 GMST (与 Cesium `computeTemeToPseudoFixedMatrix` 同一类近似), 不含极移. 页面时间轴跨 2 天, 进动一直开着.
+
+## 相机模型
+
+与 Cesium `Camera.setView` 一致, 也与 Python `camera_axes_from_hpr` 一致:
+
+- `direction = -Z`, `up = +Y`, `right = +X`
+- heading 0 朝北, pitch 0 望当地地平线, pitch -90 为天底, roll 绕视线
+- 先在 ENU 上用 `heading - pi/2`, 再 `Rz(-h) Ry(-p) Rx(roll)`
+
+JSON 里同时有 `direction` 与 `up` (或 `right`) 时, 用向量重正交化, 不再用 HPR 重算. 导出类型为 `astrox-sensor-camera`, 含大地坐标, ECEF, direction/up/right, HPR (度), hfov/vfov, `fovUnit: "deg"`.
+
+视线:
+
+```
+u, v ∈ [-1, 1]
+dir = normalize(direction + u*tan(hfov/2)*right + v*tan(vfov/2)*up)
+```
+
+像素 `(i, j)` (第 0 行在上) 取像素中心: `u = (i+0.5)/W*2-1`, `v = 1-(j+0.5)/H*2`.
+
+默认视场 8° x 6°, 姿态 heading 0, pitch -90, roll 0. 航向沿轨只是可选按钮, 默认不把像面转到速度方向.
+
+## 定尺与重采样
+
+未给宽高时:
+
+```
+W = round(2 * range * tan(hfov/2) / resolution)
+H = round(2 * range * tan(vfov/2) / resolution)
+```
+
+`range` 是光轴与椭球的交距. 天底时等于测地高. `round` 用 Python 3 的银行家舍入. 这个尺寸在垂直于视线的切平面上, 侧视时地面 GSD 更粗, 并写入 manifest 的 `sizingPlaneGsdMeters` 与 `centerGroundGsdMeters`.
+
+长边超过上限就报错, 不静默缩小. 页面默认上限 1024, 算法允许调到 16384. 默认分辨率 1000 m/px, 500 km 天底约 70 x 52, 避免一打开就铺很大的画布.
+
+瓦片级别用 `zoom_for_resolution`: 选不粗于目标分辨率的最小级别. EPSG:4326 的 0 级是 2 x 1 张瓦片, Y 自上而下为 XYZ. TMS 只在请求 URL 时翻转 Y.
+
+每个输出像素求交后, 到拼接画布上双线性采样. 没命中椭球的像素 alpha 为 0. 瓦片失败也留空, 并写进 `failedTiles`. manifest 字段与 Python `extract_image_plane` 对齐 (相机, 尺寸, 斜距, 两种 GSD, zoom, 瓦片清单, 命中比例等).
+
+EPSG:4326 的画布坐标与 Python 一致, 宽视场抽样像素逐值相同. EPSG:3857 的拼接范围单位是米. Python 在换算墨卡托之前用 `floor((lon - west) / 360)` 展开经度, `west` 却是米, 采样会落到画布外, 照片全透明. 页面先把西边界换成经度 `west / Re * 180/pi` (反子午线外可以小于 -180) 再展开. 4326 不走这条分支.
+
+脚印用视场四边的交点, 经度按相邻点展开, 避免 180° 跳变.
+
+## 页面
+
+- `camera.html` 从仓库根目录 `CesiumTemplate.html` 起: CesiumJS 1.140 CDN, 沿用仓库已有的 Ion token.
+- 不用世界地形. 求交在椭球上, 地形会让脚印和求交看起来不一致.
+- 画出卫星 (示意球体, 不是真实尺寸), 2 天的轨道和星下点轨, 以及当前这一圈的高亮. 矩形近像面, 四条角射线, 星下点连线和地面脚印跟相机走.
+- 底图用经纬网格. 仓库里的 Ion token 拉不到默认全球影像 (asset 2 返回 404), 网格不依赖那次请求. 光照仍开着.
+- 跟随相机默认打开. 拖动地球会关掉跟随.
+- 定格只冻结相机的大地位置, 时间继续走, 姿态仍可改. 拍照使用定格位置 (若有) 和当前 HPR.
+- 侧视按钮按当前位置搜索 pitch, 使视场上边缘 (`v = +1`) 落在地平线外, 下边缘和光轴仍打到椭球.
+- 瓦片默认是程序化经纬色块 (0.2° 棋盘, 1° 经纬网, 赤道和本初子午线另色), 不依赖外网. URL 模板可填, 失败时写出 HTTP 状态, 超时或 CORS. 模板里的 `<id>` 会直接提示, 不去请求.
+
+## 验证
+
+`python -m http.server 8000`, 打开 `camera/camera.html`.
+
+不打开页面时:
+
+```
+node camera/selftest.mjs
+```
+
+自检覆盖瓦片计数, 射线-椭球, 天底与朝北标架, SSO 根数和 LTAN, JSON 向量优先于 HPR, 程序化瓦片上的 70x52 天底片, 以及侧视上边缘透明.
+
+与 Python `extract_fov_tiles.py` 对过若干姿态: direction/up/right 到 1e-12, 像素交点经纬度到 1e-8, 定尺和中心地面 GSD 一致. 宽视场 lon/lat 色带的抽样像素与 Python 输出逐值相同.
