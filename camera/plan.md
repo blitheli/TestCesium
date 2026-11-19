@@ -102,11 +102,13 @@ EPSG:4326 的画布坐标与 Python 一致, 宽视场抽样像素逐值相同. E
 - `camera.html` 从仓库根目录 `CesiumTemplate.html` 起: CesiumJS 1.140 CDN, 沿用仓库已有的 Ion token.
 - 不用世界地形. 求交在椭球上, 地形会让脚印和求交看起来不一致.
 - 画出卫星 (示意球体, 不是真实尺寸), 2 天的轨道和星下点轨, 以及当前这一圈的高亮. 矩形近像面, 四条角射线, 星下点连线和地面脚印跟相机走.
-- 底图用经纬网格. 仓库里的 Ion token 拉不到默认全球影像 (asset 2 返回 404), 网格不依赖那次请求. 光照仍开着.
+- 底图来自 `viewer.imageryLayers`. 默认不加载 Ion 全球影像 (`baseLayer: false`), 因为这个 token 请求 asset 2 会 404. 启动时有两层可选: 程序化经纬色块 (Geographic, 默认选中) 和经纬网格. 下拉框选中哪一层, 地球就只显示那一层.
+- 拍照调用选中层 `imageryProvider.requestImage(x, y, level)`, 和地球用的是同一个 provider. 切片方案由 0 级瓦片数决定: 2x1 为 EPSG:4326, 1x1 为 EPSG:3857. 级别夹在该层的 minimumLevel 和 maximumLevel 之间. 某层 404, 超时或 CORS 时只报错, 不改去画另一层.
+- URL 输入用来新增一个 `UrlTemplateImageryProvider` 并立刻选中. `{y}` 在 TMS 下换成 Cesium 的 `{reverseY}`. 它不是拍照的旁路.
 - 跟随相机默认打开. 拖动地球会关掉跟随.
 - 定格只冻结相机的大地位置, 时间继续走, 姿态仍可改. 拍照使用定格位置 (若有) 和当前 HPR.
 - 侧视按钮按当前位置搜索 pitch, 使视场上边缘 (`v = +1`) 落在地平线外, 下边缘和光轴仍打到椭球.
-- 瓦片默认是程序化经纬色块 (0.2° 棋盘, 1° 经纬网, 赤道和本初子午线另色), 不依赖外网. URL 模板可填, 失败时写出 HTTP 状态, 超时或 CORS. 模板里的 `<id>` 会直接提示, 不去请求.
+- 程序化经纬色块是一个 ImageryProvider: 0.2° 棋盘, 1° 经纬网, 赤道和本初子午线另色. 地球和照片都走它的 `requestImage`. 经纬网格是另一层, 选中后照片应变成网格而不是色块.
 
 ## 验证
 
@@ -118,6 +120,6 @@ EPSG:4326 的画布坐标与 Python 一致, 宽视场抽样像素逐值相同. E
 node camera/selftest.mjs
 ```
 
-自检覆盖瓦片计数, 射线-椭球, 天底与朝北标架, SSO 根数和 LTAN, JSON 向量优先于 HPR, 程序化瓦片上的 70x52 天底片, 以及侧视上边缘透明.
+自检覆盖瓦片计数, 射线-椭球, 天底与朝北标架, SSO 根数和 LTAN, JSON 向量优先于 HPR, 程序化瓦片上的 70x52 天底片, 侧视上边缘透明, 以及换影像层后中心像素跟着变, 失败层保持透明.
 
 与 Python `extract_fov_tiles.py` 对过若干姿态: direction/up/right 到 1e-12, 像素交点经纬度到 1e-8, 定尺和中心地面 GSD 一致. 宽视场 lon/lat 色带的抽样像素与 Python 输出逐值相同.

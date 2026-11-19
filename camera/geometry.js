@@ -61,6 +61,12 @@ export function tileCountX(srs, zoom) {
   return is4326(srs) ? 2 << zoom : 1 << zoom;
 }
 
+export function srsFromLevel0Tiles(nx, ny) {
+  if (nx === 2 && ny === 1) return "EPSG:4326";
+  if (nx === 1 && ny === 1) return "EPSG:3857";
+  return null;
+}
+
 export function tileCountY(srs, zoom) {
   return 1 << zoom;
 }

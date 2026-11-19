@@ -164,26 +164,31 @@
         <label>vfov °<input id="vfov" type="number" value="6" min="0.2" max="80" step="0.5" /></label>
         <label>分辨率 m/px<input id="resolution" type="number" value="1000" min="50" step="100" /></label>
         <label>长边上限<input id="maxEdge" type="number" value="1024" min="16" max="16384" step="16" /></label>
-        <label>SRS
-          <select id="srs">
+      </div>
+      <label>影像层
+        <select id="imageryLayer"></select>
+      </label>
+      <p class="muted">拍照只读取这里选中的 ImageryLayer, 地球也只显示这一层.</p>
+      <label>添加 URL 影像层
+        <input id="urlTemplate" type="text" spellcheck="false" value="http://astrox.cn:8768/xyz/&lt;id&gt;/{z}/{x}/{y}.png" />
+      </label>
+      <div class="grid two">
+        <label>新层 SRS
+          <select id="newSrs">
             <option value="EPSG:4326" selected>EPSG:4326</option>
             <option value="EPSG:3857">EPSG:3857</option>
           </select>
         </label>
-        <label>方案
-          <select id="scheme">
+        <label>新层 Y
+          <select id="newScheme">
             <option value="xyz" selected>xyz</option>
             <option value="tms">tms</option>
           </select>
         </label>
       </div>
-      <label>瓦片源
-        <select id="source">
-          <option value="procedural" selected>程序化经纬色块 (离线)</option>
-          <option value="url">URL 模板</option>
-        </select>
-      </label>
-      <input id="urlTemplate" type="text" spellcheck="false" value="http://astrox.cn:8768/xyz/&lt;id&gt;/{z}/{x}/{y}.png" />
+      <div class="buttons">
+        <button id="addLayer" type="button">添加并选中</button>
+      </div>
       <div class="checks">
         <label><input id="follow" type="checkbox" checked /> 跟随卫星</label>
         <label>倍率<input id="multiplier" type="number" value="120" min="1" step="10" /></label>

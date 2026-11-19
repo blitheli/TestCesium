@@ -9,6 +9,7 @@ import {
   cameraFromSensorJson,
   centerRayHit,
   exportSensorCameraJSON,
+  srsFromLevel0Tiles,
   gsdMeters,
   imageSizeFromResolution,
   lonlatToTile,
@@ -198,6 +199,43 @@ const mpix = shotM.image.slice((my * shotM.width + mx) * 4, (my * shotM.width + 
 check("3857 center opaque", mpix[3] > 200, [...mpix]);
 check("3857 center not black", mpix[0] > 20 && mpix[1] > 20, [...mpix]);
 console.log(`  3857 天底 ${shotM.width}x${shotM.height} z=${shotM.manifest.zoom} 中心像素 ${[...mpix]}`);
+
+check("level0 geographic is 4326", srsFromLevel0Tiles(2, 1) === "EPSG:4326");
+check("level0 mercator is 3857", srsFromLevel0Tiles(1, 1) === "EPSG:3857");
+check("unknown tiling is null", srsFromLevel0Tiles(4, 2) == null);
+
+function solidLayer(r, g, b, title) {
+  return async ({ tileSize }) => {
+    const data = new Uint8ClampedArray(tileSize * tileSize * 4);
+    for (let i = 0; i < tileSize * tileSize; i++) {
+      data[i * 4] = r;
+      data[i * 4 + 1] = g;
+      data[i * 4 + 2] = b;
+      data[i * 4 + 3] = 255;
+    }
+    return { data, url: `layer://${title}`, error: null };
+  };
+}
+
+const layerCam = cameraFromGeodeticHpr(0, 0, 500000, 0, -90, 0, 8, 6);
+const layerOpts = { resolutionM: 4000, srs: srsFromLevel0Tiles(2, 1), maxTiles: 8 };
+const redShot = await extractImagePlane(layerCam, { ...layerOpts, getTile: solidLayer(220, 10, 10, "red"), sourceTitle: "red-layer" });
+const blueShot = await extractImagePlane(layerCam, { ...layerOpts, getTile: solidLayer(10, 10, 220, "blue"), sourceTitle: "blue-layer" });
+const lcx = (redShot.width / 2) | 0;
+const lcy = (redShot.height / 2) | 0;
+const redPx = redShot.image.slice((lcy * redShot.width + lcx) * 4, (lcy * redShot.width + lcx) * 4 + 4);
+const bluePx = blueShot.image.slice((lcy * blueShot.width + lcx) * 4, (lcy * blueShot.width + lcx) * 4 + 4);
+check("photo follows red layer", redPx[0] > 200 && redPx[2] < 40 && redPx[3] > 200, [...redPx]);
+check("photo follows blue layer", bluePx[2] > 200 && bluePx[0] < 40 && bluePx[3] > 200, [...bluePx]);
+check("manifest names selected layer", redShot.manifest.sourceTitle === "red-layer" && blueShot.manifest.sourceTitle === "blue-layer");
+const failedShot = await extractImagePlane(layerCam, {
+  ...layerOpts,
+  sourceTitle: "broken-layer",
+  getTile: async () => ({ data: null, url: "http://tiles.example/missing.png", error: "HTTP 404" }),
+});
+const failPx = failedShot.image[(lcy * failedShot.width + lcx) * 4 + 3];
+check("failed layer does not borrow other colors", failPx === 0 && failedShot.failed.length === failedShot.manifest.tileCount, `A=${failPx} failed=${failedShot.failed.length}`);
+console.log("  选中影像层: 红/蓝中心像素随层变化, 失败层保持透明");
 console.log(
   `  根数 a=${ELEMENTS.a} e=${ELEMENTS.e} i=${ELEMENTS.iDeg.toFixed(8)} RAAN0=${ELEMENTS.raan0Deg.toFixed(6)} LTAN=${epoch.ltanHours} 周期=${(ELEMENTS.periodSec / 60).toFixed(3)} min`
 );

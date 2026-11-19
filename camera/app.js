@@ -12,6 +12,7 @@ import {
   rayIntersectEllipsoid,
   scale3,
   trackHeadingRad,
+  srsFromLevel0Tiles,
   zoomForResolution,
 } from "./geometry.js";
 import {
@@ -145,6 +146,7 @@ if (typeof Cesium === "undefined") {
   const viewer = new Cesium.Viewer("cesiumContainer", {
     animation: true,
     timeline: true,
+    baseLayer: false,
     baseLayerPicker: true,
     geocoder: false,
     homeButton: true,
@@ -157,21 +159,7 @@ if (typeof Cesium === "undefined") {
   viewer.scene.fog.enabled = false;
   viewer.scene.globe.depthTestAgainstTerrain = false;
   viewer.scene.globe.baseColor = Cesium.Color.fromCssColorString("#0b3d5c");
-  try {
-    viewer.imageryLayers.removeAll();
-    viewer.imageryLayers.addImageryProvider(
-      new Cesium.GridImageryProvider({
-        tilingScheme: new Cesium.GeographicTilingScheme(),
-        cells: 4,
-        color: Cesium.Color.fromCssColorString("#d7eef8").withAlpha(0.7),
-        glowColor: Cesium.Color.fromCssColorString("#d7eef8").withAlpha(0.2),
-        glowWidth: 1,
-        backgroundColor: Cesium.Color.fromCssColorString("#0b3d5c"),
-      })
-    );
-  } catch (err) {
-    console.warn(err);
-  }
+  state.suppressLayerPick = true;
 
   const start = Cesium.JulianDate.fromIso8601(ELEMENTS.epochIso);
   const stop = Cesium.JulianDate.addDays(start, 2, new Cesium.JulianDate());
@@ -396,10 +384,11 @@ if (typeof Cesium === "undefined") {
       const sized = imageSizeFromResolution(camera, num("resolution"), null, null, num("maxEdge"));
       const center = centerRayHit(camera);
       const lat = center ? center.lat : camera.lat;
-      const zoom = zoomForResolution(num("resolution"), $("srs").value, lat);
+      const info = selectedLayerInfo();
+      const zoom = zoomForResolution(num("resolution"), info.srs, lat, info.tileSize, info.minZoom, info.maxZoom);
       $("estimate").textContent =
         `定尺约 ${sized.width} x ${sized.height} px, 中心斜距 ${sized.range.toFixed(0)} m, 预计 z=${zoom}. ` +
-        "侧视时地面 GSD 比切平面更粗.";
+        `影像层 ${info.name}, ${info.srs}. 侧视时地面 GSD 比切平面更粗.`;
     } catch (err) {
       $("estimate").textContent = err.message || String(err);
     }
@@ -429,7 +418,7 @@ if (typeof Cesium === "undefined") {
     if (state.follow) applyFollow(cameraAt(viewer.clock.currentTime));
     else releaseFollow();
   });
-  for (const id of ["heading", "pitch", "roll", "hfov", "vfov", "resolution", "maxEdge", "srs"]) {
+  for (const id of ["heading", "pitch", "roll", "hfov", "vfov", "resolution", "maxEdge"]) {
     $(id).addEventListener("input", updateEstimate);
   }
 
@@ -474,46 +463,213 @@ if (typeof Cesium === "undefined") {
     $("toggle").textContent = collapsed ? "+" : "−";
   });
 
-  async function fetchUrlTile(req) {
-    const template = $("urlTemplate").value.trim();
-    if (!template || template.includes("<id>") || template.includes("%3Cid%3E")) {
-      return { data: null, url: req.url, error: "URL 模板仍包含 <id>, 请换成真实影像源 id, 或改回程序化瓦片" };
+  function layerLabel(layer, index) {
+    if (layer.name) return layer.name;
+    const provider = layer.imageryProvider;
+    const credit = provider && provider.credit;
+    const text = credit && (credit.html || credit.text);
+    if (text) return String(text).replace(/<[^>]+>/g, "").slice(0, 72);
+    const ctor = provider && provider.constructor && provider.constructor.name;
+    return ctor && ctor !== "Object" ? ctor : `影像层 ${index + 1}`;
+  }
+
+  function refreshLayerList() {
+    const select = $("imageryLayer");
+    const current = state.selectedLayer;
+    select.innerHTML = "";
+    for (let i = 0; i < viewer.imageryLayers.length; i++) {
+      const layer = viewer.imageryLayers.get(i);
+      const option = document.createElement("option");
+      option.value = String(i);
+      option.textContent = layerLabel(layer, i);
+      if (layer === current) option.selected = true;
+      select.appendChild(option);
     }
-    const ctrl = new AbortController();
-    const timer = setTimeout(() => ctrl.abort(), 20000);
+  }
+
+  function selectLayer(layer) {
+    if (!layer) return;
+    state.selectedLayer = layer;
+    const collection = viewer.imageryLayers;
+    for (let i = 0; i < collection.length; i++) {
+      collection.get(i).show = collection.get(i) === layer;
+    }
+    if (collection.indexOf(layer) !== collection.length - 1) collection.raiseToTop(layer);
+    refreshLayerList();
+    updateEstimate();
+  }
+
+  function selectedLayerInfo() {
+    const layer = state.selectedLayer;
+    const provider = layer && layer.imageryProvider;
+    if (!provider || !provider.tilingScheme) throw new Error("没有选中的影像层.");
+    const scheme = provider.tilingScheme;
+    const nx = scheme.getNumberOfXTilesAtLevel(0);
+    const ny = scheme.getNumberOfYTilesAtLevel(0);
+    const srs = srsFromLevel0Tiles(nx, ny);
+    if (!srs) throw new Error(`当前影像层 0 级是 ${nx}x${ny}, 不是全球 Geographic (2x1) 或 WebMercator (1x1).`);
+    if (srs === "EPSG:4326" && scheme.rectangle) {
+      const west = Cesium.Math.toDegrees(scheme.rectangle.west);
+      const east = Cesium.Math.toDegrees(scheme.rectangle.east);
+      const south = Cesium.Math.toDegrees(scheme.rectangle.south);
+      const north = Cesium.Math.toDegrees(scheme.rectangle.north);
+      if (Math.abs(west + 180) > 0.01 || Math.abs(east - 180) > 0.01 || Math.abs(south + 90) > 0.01 || Math.abs(north - 90) > 0.01) {
+        throw new Error("当前影像层不是全球范围, 像面重采样按全球切片计算.");
+      }
+    }
+    const maxZoom = provider.maximumLevel == null || !Number.isFinite(provider.maximumLevel) ? 22 : provider.maximumLevel;
+    return {
+      layer,
+      provider,
+      name: layer.name || layerLabel(layer, 0),
+      srs,
+      tileSize: provider.tileWidth || 256,
+      minZoom: provider.minimumLevel || 0,
+      maxZoom,
+      url: typeof provider.url === "string" ? provider.url : `cesium-imagery://${layer.name || "layer"}/{z}/{x}/{y}`,
+    };
+  }
+
+  function tileUrl(info, z, x, y) {
+    return String(info.url)
+      .replaceAll("{z}", String(z))
+      .replaceAll("{zoom}", String(z))
+      .replaceAll("{x}", String(x))
+      .replaceAll("{y}", String(y))
+      .replaceAll("{reverseY}", String(y));
+  }
+
+  async function rgbaFromProviderImage(image, width, height) {
+    const canvas = document.createElement("canvas");
+    canvas.width = width;
+    canvas.height = height;
+    const ctx = canvas.getContext("2d", { willReadFrequently: true });
+    ctx.drawImage(image, 0, 0, width, height);
     try {
-      const resp = await fetch(req.url, { signal: ctrl.signal, mode: "cors" });
-      if (resp.status === 404) return { data: null, url: req.url, error: "HTTP 404" };
-      if (!resp.ok) return { data: null, url: req.url, error: `HTTP ${resp.status}` };
-      const blob = await resp.blob();
-      const bmp = await createImageBitmap(blob);
-      const canvas = document.createElement("canvas");
-      canvas.width = req.tileSize;
-      canvas.height = req.tileSize;
-      const ctx = canvas.getContext("2d", { willReadFrequently: true });
-      ctx.drawImage(bmp, 0, 0, req.tileSize, req.tileSize);
-      const data = ctx.getImageData(0, 0, req.tileSize, req.tileSize).data;
-      if (bmp.close) bmp.close();
-      return { data, url: req.url, error: null };
-    } catch (err) {
-      const raw = err && err.name === "AbortError" ? "请求超时" : err && err.message ? err.message : String(err);
-      const cors = /fetch|network|cors|failed/i.test(raw);
-      return {
-        data: null,
-        url: req.url,
-        error: cors ? `${raw}. 可能是 CORS 或服务不可达, 可改回程序化瓦片源.` : raw,
-      };
-    } finally {
-      clearTimeout(timer);
+      return ctx.getImageData(0, 0, width, height).data;
+    } catch (_err) {
+      throw new Error("无法读取影像像素, 多半是跨域 (CORS). 该影像层的瓦片不允许浏览器读取, 照片不会改用其他层.");
     }
   }
 
   async function getTile(req) {
-    if ($("source").value === "procedural") {
-      return { data: renderProceduralTile(req.z, req.x, req.y, req.srs, req.tileSize, "map"), url: req.url, error: null };
+    const info = selectedLayerInfo();
+    const url = tileUrl(info, req.z, req.x, req.y);
+    try {
+      let image = info.provider.requestImage(req.x, req.y, req.z);
+      if (image && typeof image.then === "function") image = await image;
+      if (!image) return { data: null, url, error: "影像层没有返回该瓦片" };
+      const data = await rgbaFromProviderImage(image, info.tileSize, info.provider.tileHeight || info.tileSize);
+      return { data, url, error: null };
+    } catch (err) {
+      return { data: null, url, error: err && err.message ? err.message : String(err) };
     }
-    return fetchUrlTile(req);
   }
+
+  function createProceduralImageryProvider() {
+    const tilingScheme = new Cesium.GeographicTilingScheme();
+    return {
+      tilingScheme,
+      rectangle: tilingScheme.rectangle,
+      tileWidth: 256,
+      tileHeight: 256,
+      minimumLevel: 0,
+      maximumLevel: 12,
+      ready: true,
+      readyPromise: Promise.resolve(true),
+      credit: new Cesium.Credit("程序化经纬色块"),
+      errorEvent: new Cesium.Event(),
+      hasAlphaChannel: true,
+      getTileCredits() {
+        return undefined;
+      },
+      pickFeatures() {
+        return undefined;
+      },
+      requestImage(x, y, level) {
+        const canvas = document.createElement("canvas");
+        canvas.width = 256;
+        canvas.height = 256;
+        const ctx = canvas.getContext("2d");
+        const imageData = ctx.createImageData(256, 256);
+        imageData.data.set(renderProceduralTile(level, x, y, "EPSG:4326", 256, "map"));
+        ctx.putImageData(imageData, 0, 0);
+        return Promise.resolve(canvas);
+      },
+    };
+  }
+
+  viewer.imageryLayers.layerAdded.addEventListener((layer) => {
+    refreshLayerList();
+    if (!state.suppressLayerPick) selectLayer(layer);
+  });
+  viewer.imageryLayers.layerRemoved.addEventListener((layer) => {
+    if (state.selectedLayer === layer) state.selectedLayer = null;
+    refreshLayerList();
+    if (!state.selectedLayer && viewer.imageryLayers.length) {
+      selectLayer(viewer.imageryLayers.get(viewer.imageryLayers.length - 1));
+    }
+  });
+  viewer.imageryLayers.layerMoved.addEventListener(() => refreshLayerList());
+
+  const proceduralLayer = viewer.imageryLayers.addImageryProvider(createProceduralImageryProvider());
+  proceduralLayer.name = "程序化经纬色块";
+  const gridLayer = viewer.imageryLayers.addImageryProvider(
+    new Cesium.GridImageryProvider({
+      tilingScheme: new Cesium.GeographicTilingScheme(),
+      cells: 4,
+      color: Cesium.Color.WHITE,
+      glowColor: Cesium.Color.WHITE.withAlpha(0.2),
+      glowWidth: 1,
+      backgroundColor: Cesium.Color.fromCssColorString("#0b3d5c"),
+    })
+  );
+  gridLayer.name = "经纬网格";
+  state.suppressLayerPick = false;
+  selectLayer(proceduralLayer);
+
+  $("imageryLayer").addEventListener("change", () => {
+    const layer = viewer.imageryLayers.get(Number($("imageryLayer").value));
+    if (layer) selectLayer(layer);
+  });
+
+  $("addLayer").addEventListener("click", () => {
+    const template = $("urlTemplate").value.trim();
+    const hasZ = template.includes("{z}") || template.includes("{zoom}");
+    if (!template || !hasZ || !template.includes("{x}") || !template.includes("{y}")) {
+      setMessage("URL 需要包含 {z} 或 {zoom}, 以及 {x} 和 {y}.", "error");
+      return;
+    }
+    if (template.includes("<id>") || template.includes("%3Cid%3E")) {
+      setMessage("URL 模板仍包含 <id>, 请换成真实影像源 id 后再添加. 当前照片仍使用已选中的影像层.", "error");
+      return;
+    }
+    const srs = $("newSrs").value;
+    const scheme = $("newScheme").value;
+    const url = scheme === "tms" ? template.replaceAll("{y}", "{reverseY}") : template;
+    try {
+      const provider = new Cesium.UrlTemplateImageryProvider({
+        url,
+        tilingScheme: srs === "EPSG:4326" ? new Cesium.GeographicTilingScheme() : new Cesium.WebMercatorTilingScheme(),
+        maximumLevel: 18,
+        credit: url,
+      });
+      const layer = viewer.imageryLayers.addImageryProvider(provider);
+      layer.name = `URL ${url.slice(0, 42)}`;
+      if (provider.errorEvent) {
+        provider.errorEvent.addEventListener((error) => {
+          if (state.selectedLayer === layer) {
+            const text = error && error.message ? error.message : String(error);
+            setMessage(`影像层请求失败: ${text}. 照片不会改用其他层.`, "error");
+          }
+        });
+      }
+      selectLayer(layer);
+      setMessage("已添加并选中影像层. 地球和拍照都使用这一层.", "ok");
+    } catch (err) {
+      setMessage(err && err.message ? err.message : String(err), "error");
+    }
+  });
 
   function showSummary(manifest) {
     const g = manifest.centerGroundGsdMeters || {};
@@ -524,7 +680,7 @@ if (typeof Cesium === "undefined") {
       `切平面 GSD ${manifest.sizingPlaneGsdMeters == null ? "-" : manifest.sizingPlaneGsdMeters.toFixed(2)} m`,
       `中心地面 GSD ${g.mean == null ? "-" : g.mean.toFixed(2)} m (x ${g.x == null ? "-" : g.x.toFixed(2)}, y ${g.y == null ? "-" : g.y.toFixed(2)})`,
       `分辨率 ${manifest.requestedResolutionMeters} m/px  瓦片 ${manifest.tileCount} 张  失败 ${manifest.failedTiles.length}`,
-      `命中 ${(manifest.hitPixelRatio * 100).toFixed(1)}%  ${manifest.sourceSrs} ${manifest.scheme}`,
+      `命中 ${(manifest.hitPixelRatio * 100).toFixed(1)}%  ${manifest.sourceTitle}  ${manifest.sourceSrs} ${manifest.scheme}`,
       manifest.centerHitLonLat ? `中心 ${manifest.centerHitLonLat[0].toFixed(4)}°, ${manifest.centerHitLonLat[1].toFixed(4)}°` : "中心未命中",
     ];
     $("summary").textContent = lines.join("\n");
@@ -536,16 +692,19 @@ if (typeof Cesium === "undefined") {
     setMessage("正在重采样...", "");
     try {
       const { camera } = cameraAt(viewer.clock.currentTime);
-      const useUrl = $("source").value === "url";
+      const info = selectedLayerInfo();
       const result = await extractImagePlane(camera, {
         resolutionM: num("resolution"),
         maxEdge: num("maxEdge"),
         maxTiles: 48,
-        srs: $("srs").value,
-        scheme: $("scheme").value,
-        urlTemplate: useUrl ? $("urlTemplate").value.trim() : "procedural://lonlat-grid/{z}/{x}/{y}.png",
-        sourceId: useUrl ? "url" : "procedural",
-        sourceTitle: useUrl ? "URL 模板" : "程序化经纬色块",
+        srs: info.srs,
+        scheme: "xyz",
+        tileSize: info.tileSize,
+        minZoom: info.minZoom,
+        maxZoom: info.maxZoom,
+        urlTemplate: info.url,
+        sourceId: info.name,
+        sourceTitle: info.name,
         getTile,
         stem: "fov",
       });
@@ -569,7 +728,7 @@ if (typeof Cesium === "undefined") {
         setMessage("中心或视场没有打到椭球, 照片全透明. 请把 pitch 调向天底.", "error");
       } else {
         setMessage(
-          `已生成 ${result.width}x${result.height}, 命中 ${(result.manifest.hitPixelRatio * 100).toFixed(1)}%, 瓦片 ${result.manifest.tileCount} 张.`,
+          `已生成 ${result.width}x${result.height}, 命中 ${(result.manifest.hitPixelRatio * 100).toFixed(1)}%, 瓦片 ${result.manifest.tileCount} 张. 影像层: ${result.manifest.sourceTitle}.`,
           "ok"
         );
       }
