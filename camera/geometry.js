@@ -386,6 +386,55 @@ export function centerRayHit(camera) {
   return { point: hit.point, t: hit.t, lon: geo.lon, lat: geo.lat, height: geo.height };
 }
 
+export function deriveDetectorOptics({ widthPx, heightPx, pixelPitchMeters, hfovRad }) {
+  const width = Math.round(widthPx);
+  const height = Math.round(heightPx);
+  if (!(width >= 1) || !(height >= 1)) throw new Error("阵列像素数必须为正整数");
+  if (!(pixelPitchMeters > 0)) throw new Error("像元尺寸必须为正");
+  if (!(hfovRad > 0) || !(hfovRad < Math.PI)) throw new Error("hfov 必须在 (0, 180) 度内");
+  const focalPlaneWidthMeters = width * pixelPitchMeters;
+  const focalPlaneHeightMeters = height * pixelPitchMeters;
+  const focalLengthMeters = focalPlaneWidthMeters / (2 * Math.tan(hfovRad / 2));
+  const vfovRad = 2 * Math.atan(Math.tan(hfovRad / 2) * (height / width));
+  const focalLengthFromHeightMeters = focalPlaneHeightMeters / (2 * Math.tan(vfovRad / 2));
+  return {
+    widthPx: width,
+    heightPx: height,
+    pixelPitchMeters,
+    focalPlaneWidthMeters,
+    focalPlaneHeightMeters,
+    focalLengthMeters,
+    focalLengthFromHeightMeters,
+    hfovRad,
+    vfovRad,
+    hfovDeg: (hfovRad * 180) / Math.PI,
+    vfovDeg: (vfovRad * 180) / Math.PI,
+    ifovHorizontalRad: hfovRad / width,
+    ifovVerticalRad: vfovRad / height,
+  };
+}
+
+export function gsdFromRange(rangeMeters, ifovRad) {
+  return rangeMeters * ifovRad;
+}
+
+export function swathFromRange(rangeMeters, fovRad) {
+  return 2 * rangeMeters * Math.tan(fovRad / 2);
+}
+
+export function assertFocalLengthConsistent(optics, claimedFocalLengthMeters, relativeTolerance = 1e-6) {
+  if (!(claimedFocalLengthMeters > 0) || !optics || !(optics.focalLengthMeters > 0)) {
+    throw new Error("焦距由阵列, 像元尺寸和视场决定, 不能另给一个不一致的 f");
+  }
+  const scale = Math.max(Math.abs(optics.focalLengthMeters), 1e-15);
+  const rel = Math.abs(claimedFocalLengthMeters - optics.focalLengthMeters) / scale;
+  const relH = Math.abs(optics.focalLengthFromHeightMeters - optics.focalLengthMeters) / scale;
+  if (rel > relativeTolerance || relH > relativeTolerance) {
+    throw new Error("焦距由阵列, 像元尺寸和视场决定, 不能另给一个不一致的 f");
+  }
+  return optics.focalLengthMeters;
+}
+
 export function imageSizeFromResolution(camera, resolutionM, width, height, maxEdge) {
   const hit = centerRayHit(camera);
   if (!hit) {
@@ -492,6 +541,19 @@ export function cameraFromSensorJson(json, overrides = {}) {
   if (vfov == null && js.vfov != null) vfov = degToRad(js.vfov, js.fovUnit || unit);
   else if (vfov != null) vfov = degToRad(vfov, angleUnit);
   if (hfov == null) throw new Error("必须提供水平视场 hfov");
+  if (js.detector && js.detector.focalLengthMeters != null && js.detector.widthPx && js.detector.heightPx && js.detector.pixelPitchMeters) {
+    const optics = deriveDetectorOptics({
+      widthPx: js.detector.widthPx,
+      heightPx: js.detector.heightPx,
+      pixelPitchMeters: js.detector.pixelPitchMeters,
+      hfovRad: hfov,
+    });
+    assertFocalLengthConsistent(optics, Number(js.detector.focalLengthMeters));
+    if (vfov != null && Math.abs(vfov - optics.vfovRad) / optics.vfovRad > 1e-4) {
+      throw new Error("vfov 与阵列纵横比和 hfov 不一致, 不能同时作为独立输入");
+    }
+    if (vfov == null) vfov = optics.vfovRad;
+  }
   if (vfov == null) {
     if (overrides.width && overrides.heightPx) {
       vfov = 2 * Math.atan(Math.tan(0.5 * hfov) * (overrides.heightPx / overrides.width));
@@ -555,6 +617,19 @@ export function exportSensorCameraJSON(camera, name) {
   if (camera.heading != null) result.heading = (camera.heading * 180) / Math.PI;
   if (camera.pitch != null) result.pitch = (camera.pitch * 180) / Math.PI;
   if (camera.roll != null) result.roll = (camera.roll * 180) / Math.PI;
+  if (camera.detector) {
+    const d = camera.detector;
+    result.detector = {
+      widthPx: d.widthPx,
+      heightPx: d.heightPx,
+      pixelPitchMeters: d.pixelPitchMeters,
+      focalPlaneWidthMeters: d.focalPlaneWidthMeters,
+      focalPlaneHeightMeters: d.focalPlaneHeightMeters,
+      focalLengthMeters: d.focalLengthMeters,
+      ifovHorizontalRad: d.ifovHorizontalRad,
+      ifovVerticalRad: d.ifovVerticalRad,
+    };
+  }
   if (name) result.name = name;
   return result;
 }

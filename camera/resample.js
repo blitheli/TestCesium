@@ -286,6 +286,7 @@ export async function extractImagePlane(camera, options) {
     requestedResolutionMeters: resolutionM,
     sizingPlaneGsdMeters: sizing,
     centerGroundGsdMeters: centerGsd,
+    detector: options.detector || null,
     notes: NOTES,
     zoom,
     tileGsdMetersAtCenterLat: gsdMeters(zoom, srs, zoomLat, tileSize),

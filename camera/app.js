@@ -1,18 +1,21 @@
 import {
   add3,
+  assertFocalLengthConsistent,
   cameraFromGeodeticHpr,
   centerRayHit,
+  deriveDetectorOptics,
   exportFootprintGeoJSON,
   exportSensorCameraJSON,
   findObliquePitchDeg,
   footprintRing,
   geodeticToEcef,
-  imageSizeFromResolution,
+  gsdFromRange,
   rayDirectionUV,
   rayIntersectEllipsoid,
   scale3,
-  trackHeadingRad,
   srsFromLevel0Tiles,
+  swathFromRange,
+  trackHeadingRad,
   zoomForResolution,
 } from "./geometry.js";
 import {
@@ -67,13 +70,49 @@ function jdOf(time) {
   return jdFromDate(Cesium.JulianDate.toDate(time));
 }
 
+const PAGE_MAX_ARRAY_EDGE = 1024;
+
+function readOpticsOrThrow() {
+  const widthPx = Math.round(num("arrayW"));
+  const heightPx = Math.round(num("arrayH"));
+  const pitchUm = num("pitchUm");
+  const hfovDeg = num("hfov");
+  if (!(widthPx >= 2) || !(heightPx >= 2)) throw new Error("阵列宽和高至少为 2 像素.");
+  if (Math.max(widthPx, heightPx) > PAGE_MAX_ARRAY_EDGE) {
+    throw new Error(`阵列长边超过 ${PAGE_MAX_ARRAY_EDGE} px. 输出像素数就是阵列大小, 请减小阵列.`);
+  }
+  const optics = deriveDetectorOptics({
+    widthPx,
+    heightPx,
+    pixelPitchMeters: pitchUm * 1e-6,
+    hfovRad: (hfovDeg * Math.PI) / 180,
+  });
+  assertFocalLengthConsistent(optics, optics.focalLengthMeters);
+  return optics;
+}
+
+function readOptics() {
+  try {
+    const optics = readOpticsOrThrow();
+    state.opticsError = null;
+    state.optics = optics;
+    return optics;
+  } catch (err) {
+    state.opticsError = err;
+    if (state.optics) return state.optics;
+    throw err;
+  }
+}
+
 function attitude() {
+  const optics = readOptics();
   return {
     heading: num("heading"),
     pitch: num("pitch"),
     roll: num("roll"),
-    hfov: num("hfov"),
-    vfov: num("vfov"),
+    hfov: optics.hfovDeg,
+    vfov: optics.vfovDeg,
+    optics,
   };
 }
 
@@ -82,6 +121,7 @@ function cameraAt(time) {
   const geo = state.frozen || st.geo;
   const att = attitude();
   const camera = cameraFromGeodeticHpr(geo.lon, geo.lat, geo.height, att.heading, att.pitch, att.roll, att.hfov, att.vfov);
+  camera.detector = att.optics;
   return { state: st, camera };
 }
 
@@ -155,6 +195,7 @@ if (typeof Cesium === "undefined") {
     infoBox: false,
     selectionIndicator: false,
   });
+  viewer.resolutionScale = 2.0;
   viewer.scene.globe.enableLighting = true;
   viewer.scene.fog.enabled = false;
   viewer.scene.globe.depthTestAgainstTerrain = false;
@@ -380,17 +421,31 @@ if (typeof Cesium === "undefined") {
 
   function updateEstimate() {
     try {
+      const optics = readOpticsOrThrow();
       const { camera } = cameraAt(viewer.clock.currentTime);
-      const sized = imageSizeFromResolution(camera, num("resolution"), null, null, num("maxEdge"));
-      const center = centerRayHit(camera);
-      const lat = center ? center.lat : camera.lat;
+      const hit = centerRayHit(camera);
+      const range = hit ? hit.t : Number.NaN;
       const info = selectedLayerInfo();
-      const zoom = zoomForResolution(num("resolution"), info.srs, lat, info.tileSize, info.minZoom, info.maxZoom);
-      $("estimate").textContent =
-        `定尺约 ${sized.width} x ${sized.height} px, 中心斜距 ${sized.range.toFixed(0)} m, 预计 z=${zoom}. ` +
-        `影像层 ${info.name}, ${info.srs}. 侧视时地面 GSD 比切平面更粗.`;
+      const gsdH = Number.isFinite(range) ? gsdFromRange(range, optics.ifovHorizontalRad) : Number.NaN;
+      const gsdV = Number.isFinite(range) ? gsdFromRange(range, optics.ifovVerticalRad) : Number.NaN;
+      const zoom = Number.isFinite(gsdH)
+        ? zoomForResolution(gsdH, info.srs, hit ? hit.lat : camera.lat, info.tileSize, info.minZoom, info.maxZoom)
+        : null;
+      const swathH = Number.isFinite(range) ? swathFromRange(range, optics.hfovRad) : Number.NaN;
+      const swathV = Number.isFinite(range) ? swathFromRange(range, optics.vfovRad) : Number.NaN;
+      const mm = (m) => (m * 1000).toFixed(3);
+      const deg = (rad) => ((rad * 180) / Math.PI).toFixed(5);
+      $("derived").textContent =
+        `vfov ${optics.vfovDeg.toFixed(4)}° (由阵列纵横比和 hfov 锁定, 保证同一焦距)\n` +
+        `焦平面 ${mm(optics.focalPlaneWidthMeters)} mm x ${mm(optics.focalPlaneHeightMeters)} mm\n` +
+        `f ${mm(optics.focalLengthMeters)} mm\n` +
+        `IFOV ${deg(optics.ifovHorizontalRad)}° x ${deg(optics.ifovVerticalRad)}°\n` +
+        `斜距 H ${Number.isFinite(range) ? range.toFixed(1) : "-"} m, 预计 z=${zoom ?? "-"}\n` +
+        `GSD ${Number.isFinite(gsdH) ? gsdH.toFixed(2) : "-"} m x ${Number.isFinite(gsdV) ? gsdV.toFixed(2) : "-"} m\n` +
+        `幅宽 ${Number.isFinite(swathH) ? (swathH / 1000).toFixed(3) : "-"} km x ${Number.isFinite(swathV) ? (swathV / 1000).toFixed(3) : "-"} km\n` +
+        `影像层 ${info.name}, ${info.srs}`;
     } catch (err) {
-      $("estimate").textContent = err.message || String(err);
+      $("derived").textContent = err.message || String(err);
     }
   }
 
@@ -407,6 +462,7 @@ if (typeof Cesium === "undefined") {
       (state.frozen ? `\n定格相机 ${geo.lon.toFixed(2)}°, ${geo.lat.toFixed(2)}°, ${(geo.height / 1000).toFixed(1)} km` : "");
     if (state.follow) applyFollow(pack);
     footprintEntity.show = !!ringCartesians(pack.camera);
+    updateEstimate();
   });
 
   $("multiplier").addEventListener("change", () => {
@@ -418,7 +474,7 @@ if (typeof Cesium === "undefined") {
     if (state.follow) applyFollow(cameraAt(viewer.clock.currentTime));
     else releaseFollow();
   });
-  for (const id of ["heading", "pitch", "roll", "hfov", "vfov", "resolution", "maxEdge"]) {
+  for (const id of ["heading", "pitch", "roll", "hfov", "arrayW", "arrayH", "pitchUm"]) {
     $(id).addEventListener("input", updateEstimate);
   }
 
@@ -430,7 +486,8 @@ if (typeof Cesium === "undefined") {
   });
   $("oblique").addEventListener("click", () => {
     const { camera } = cameraAt(viewer.clock.currentTime);
-    const pitch = findObliquePitchDeg(camera.lon, camera.lat, camera.height, num("heading"), num("roll"), num("hfov"), num("vfov"));
+    const optics = readOptics();
+    const pitch = findObliquePitchDeg(camera.lon, camera.lat, camera.height, num("heading"), num("roll"), optics.hfovDeg, optics.vfovDeg);
     $("pitch").value = pitch.toFixed(2);
     updateEstimate();
     setMessage(`侧视 pitch=${pitch.toFixed(2)}°. 上边缘射线落到地平线外, 拍照后上边应为透明.`, "ok");
@@ -672,18 +729,43 @@ if (typeof Cesium === "undefined") {
   });
 
   function showSummary(manifest) {
+    const d = manifest.detector || {};
     const g = manifest.centerGroundGsdMeters || {};
+    const mm = (m) => (m == null ? "-" : (m * 1000).toFixed(3));
+    const deg = (rad) => (rad == null ? "-" : ((rad * 180) / Math.PI).toFixed(5));
     const lines = [
       `像面 ${manifest.sizePixels[0]} x ${manifest.sizePixels[1]}  z=${manifest.zoom}`,
-      `hfov ${manifest.camera.hfovDeg.toFixed(3)}°  vfov ${manifest.camera.vfovDeg.toFixed(3)}°`,
-      `中心斜距 ${manifest.centerRangeMeters == null ? "-" : manifest.centerRangeMeters.toFixed(1)} m`,
-      `切平面 GSD ${manifest.sizingPlaneGsdMeters == null ? "-" : manifest.sizingPlaneGsdMeters.toFixed(2)} m`,
-      `中心地面 GSD ${g.mean == null ? "-" : g.mean.toFixed(2)} m (x ${g.x == null ? "-" : g.x.toFixed(2)}, y ${g.y == null ? "-" : g.y.toFixed(2)})`,
-      `分辨率 ${manifest.requestedResolutionMeters} m/px  瓦片 ${manifest.tileCount} 张  失败 ${manifest.failedTiles.length}`,
-      `命中 ${(manifest.hitPixelRatio * 100).toFixed(1)}%  ${manifest.sourceTitle}  ${manifest.sourceSrs} ${manifest.scheme}`,
-      manifest.centerHitLonLat ? `中心 ${manifest.centerHitLonLat[0].toFixed(4)}°, ${manifest.centerHitLonLat[1].toFixed(4)}°` : "中心未命中",
+      `hfov ${manifest.camera.hfovDeg.toFixed(4)}°  vfov ${manifest.camera.vfovDeg.toFixed(4)}°`,
+      `f ${mm(d.focalLengthMeters)} mm, 焦平面 ${mm(d.focalPlaneWidthMeters)} mm x ${mm(d.focalPlaneHeightMeters)} mm`,
+      `IFOV ${deg(d.ifovHorizontalRad)}° x ${deg(d.ifovVerticalRad)}°`,
+      `斜距 H ${manifest.centerRangeMeters == null ? "-" : manifest.centerRangeMeters.toFixed(1)} m`,
+      `GSD ${d.gsdHorizontalMeters == null ? "-" : d.gsdHorizontalMeters.toFixed(2)} m x ${d.gsdVerticalMeters == null ? "-" : d.gsdVerticalMeters.toFixed(2)} m`,
+      `幅宽 ${d.swathHorizontalMeters == null ? "-" : (d.swathHorizontalMeters / 1000).toFixed(3)} km x ${d.swathVerticalMeters == null ? "-" : (d.swathVerticalMeters / 1000).toFixed(3)} km`,
+      `切平面像元 ${manifest.sizingPlaneGsdMeters == null ? "-" : manifest.sizingPlaneGsdMeters.toFixed(2)} m, 中心地面 ${g.mean == null ? "-" : g.mean.toFixed(2)} m`,
+      `瓦片 ${manifest.tileCount} 张  失败 ${manifest.failedTiles.length}`,
+      `命中 ${(manifest.hitPixelRatio * 100).toFixed(1)}%  ${manifest.sourceTitle}  ${manifest.sourceSrs}`,
     ];
     $("summary").textContent = lines.join("\n");
+  }
+
+  function detectorRecord(optics, range) {
+    return {
+      widthPx: optics.widthPx,
+      heightPx: optics.heightPx,
+      pixelPitchMeters: optics.pixelPitchMeters,
+      focalPlaneWidthMeters: optics.focalPlaneWidthMeters,
+      focalPlaneHeightMeters: optics.focalPlaneHeightMeters,
+      focalLengthMeters: optics.focalLengthMeters,
+      hfovDeg: optics.hfovDeg,
+      vfovDeg: optics.vfovDeg,
+      ifovHorizontalRad: optics.ifovHorizontalRad,
+      ifovVerticalRad: optics.ifovVerticalRad,
+      rangeMeters: range,
+      gsdHorizontalMeters: gsdFromRange(range, optics.ifovHorizontalRad),
+      gsdVerticalMeters: gsdFromRange(range, optics.ifovVerticalRad),
+      swathHorizontalMeters: swathFromRange(range, optics.hfovRad),
+      swathVerticalMeters: swathFromRange(range, optics.vfovRad),
+    };
   }
 
   async function capture() {
@@ -692,11 +774,17 @@ if (typeof Cesium === "undefined") {
     setMessage("正在重采样...", "");
     try {
       const { camera } = cameraAt(viewer.clock.currentTime);
+      const optics = camera.detector;
+      const hit = centerRayHit(camera);
+      if (!hit) throw new Error("中心射线未与地球相交, 无法由斜距计算 GSD 和幅宽.");
       const info = selectedLayerInfo();
+      const gsdH = gsdFromRange(hit.t, optics.ifovHorizontalRad);
       const result = await extractImagePlane(camera, {
-        resolutionM: num("resolution"),
-        maxEdge: num("maxEdge"),
-        maxTiles: 48,
+        width: optics.widthPx,
+        height: optics.heightPx,
+        resolutionM: gsdH,
+        maxEdge: PAGE_MAX_ARRAY_EDGE,
+        maxTiles: 96,
         srs: info.srs,
         scheme: "xyz",
         tileSize: info.tileSize,
@@ -705,6 +793,7 @@ if (typeof Cesium === "undefined") {
         urlTemplate: info.url,
         sourceId: info.name,
         sourceTitle: info.name,
+        detector: detectorRecord(optics, hit.t),
         getTile,
         stem: "fov",
       });

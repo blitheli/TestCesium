@@ -57,7 +57,7 @@
       font-weight: 700;
     }
 
-    .muted { margin: 0 0 8px; color: #c5cde0; }
+    #derived { white-space: pre-line; }
     #status { margin: 0 0 8px; font-variant-numeric: tabular-nums; }
     #message { min-height: 1.2em; margin: 8px 0; white-space: pre-wrap; }
     #message.error { color: #ffb4b4; }
@@ -160,11 +160,12 @@
         <label>roll °<input id="roll" type="number" value="0" step="1" /></label>
       </div>
       <div class="grid two">
-        <label>hfov °<input id="hfov" type="number" value="8" min="0.2" max="80" step="0.5" /></label>
-        <label>vfov °<input id="vfov" type="number" value="6" min="0.2" max="80" step="0.5" /></label>
-        <label>分辨率 m/px<input id="resolution" type="number" value="1000" min="50" step="100" /></label>
-        <label>长边上限<input id="maxEdge" type="number" value="1024" min="16" max="16384" step="16" /></label>
+        <label>阵列宽 px<input id="arrayW" type="number" value="256" min="2" max="1024" step="1" /></label>
+        <label>阵列高 px<input id="arrayH" type="number" value="192" min="2" max="1024" step="1" /></label>
+        <label>像元 d µm<input id="pitchUm" type="number" value="10" min="0.1" step="0.1" /></label>
+        <label>hfov °<input id="hfov" type="number" value="8" min="0.2" max="120" step="0.1" /></label>
       </div>
+      <p id="derived" class="muted"></p>
       <label>影像层
         <select id="imageryLayer"></select>
       </label>

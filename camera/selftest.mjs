@@ -8,8 +8,12 @@ import {
   cameraFromGeodeticHpr,
   cameraFromSensorJson,
   centerRayHit,
+  deriveDetectorOptics,
   exportSensorCameraJSON,
+  gsdFromRange,
   srsFromLevel0Tiles,
+  swathFromRange,
+  assertFocalLengthConsistent,
   gsdMeters,
   imageSizeFromResolution,
   lonlatToTile,
@@ -236,6 +240,56 @@ const failedShot = await extractImagePlane(layerCam, {
 const failPx = failedShot.image[(lcy * failedShot.width + lcx) * 4 + 3];
 check("failed layer does not borrow other colors", failPx === 0 && failedShot.failed.length === failedShot.manifest.tileCount, `A=${failPx} failed=${failedShot.failed.length}`);
 console.log("  选中影像层: 红/蓝中心像素随层变化, 失败层保持透明");
+
+const square = deriveDetectorOptics({
+  widthPx: 1024,
+  heightPx: 1024,
+  pixelPitchMeters: 10e-6,
+  hfovRad: (8 * Math.PI) / 180,
+});
+const f1024 = (1024 * 10e-6) / (2 * Math.tan((4 * Math.PI) / 180));
+check("f from array, pitch, hfov", Math.abs(square.focalLengthMeters - f1024) / f1024 < 1e-12, square.focalLengthMeters);
+check("square array keeps one fov", Math.abs(square.vfovDeg - 8) < 1e-9, square.vfovDeg);
+check("both axes share f", Math.abs(square.focalLengthFromHeightMeters - square.focalLengthMeters) / f1024 < 1e-9);
+const rect = deriveDetectorOptics({
+  widthPx: 256,
+  heightPx: 192,
+  pixelPitchMeters: 10e-6,
+  hfovRad: (8 * Math.PI) / 180,
+});
+const vfovExpect = 2 * Math.atan(Math.tan(rect.hfovRad / 2) * (192 / 256));
+check("vfov follows array aspect", Math.abs(rect.vfovRad - vfovExpect) < 1e-12, rect.vfovDeg);
+check("focal plane is n times pitch", Math.abs(rect.focalPlaneWidthMeters - 0.00256) < 1e-15 && Math.abs(rect.focalPlaneHeightMeters - 0.00192) < 1e-15);
+const rangeH = 500000;
+const ifovH = ((8 * Math.PI) / 180) / 1024;
+check("gsd is range times ifov", Math.abs(gsdFromRange(rangeH, square.ifovHorizontalRad) - rangeH * ifovH) < 1e-6);
+check(
+  "swath is 2 H tan(fov/2)",
+  Math.abs(swathFromRange(rangeH, square.hfovRad) - 2 * rangeH * Math.tan((4 * Math.PI) / 180)) < 1e-4
+);
+let rejected = false;
+try {
+  assertFocalLengthConsistent(square, square.focalLengthMeters * 1.25);
+} catch (err) {
+  rejected = /焦距/.test(err.message);
+}
+check("conflicting f rejected", rejected);
+const detCam = cameraFromGeodeticHpr(0, 0, 500000, 0, -90, 0, rect.hfovDeg, rect.vfovDeg);
+detCam.detector = rect;
+const detJson = exportSensorCameraJSON(detCam, "detector");
+check("export keeps geometric hfov", Math.abs(detJson.hfov - 8) < 1e-9);
+check("export stores derived f", Math.abs(detJson.detector.focalLengthMeters - rect.focalLengthMeters) < 1e-12);
+detJson.detector.focalLengthMeters *= 2;
+let jsonRejected = false;
+try {
+  cameraFromSensorJson(detJson);
+} catch (err) {
+  jsonRejected = /焦距/.test(err.message);
+}
+check("json conflicting f rejected", jsonRejected);
+console.log(
+  `  探测器 f=${(rect.focalLengthMeters * 1000).toFixed(3)} mm, vfov=${rect.vfovDeg.toFixed(4)}°, 1024 方阵 f=${(square.focalLengthMeters * 1000).toFixed(3)} mm`
+);
 console.log(
   `  根数 a=${ELEMENTS.a} e=${ELEMENTS.e} i=${ELEMENTS.iDeg.toFixed(8)} RAAN0=${ELEMENTS.raan0Deg.toFixed(6)} LTAN=${epoch.ltanHours} 周期=${(ELEMENTS.periodSec / 60).toFixed(3)} min`
 );

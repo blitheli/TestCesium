@@ -74,7 +74,7 @@ dir = normalize(direction + u*tan(hfov/2)*right + v*tan(vfov/2)*up)
 
 像素 `(i, j)` (第 0 行在上) 取像素中心: `u = (i+0.5)/W*2-1`, `v = 1-(j+0.5)/H*2`.
 
-默认视场 8° x 6°, 姿态 heading 0, pitch -90, roll 0. 航向沿轨只是可选按钮, 默认不把像面转到速度方向.
+默认水平视场 8°, 阵列 256 x 192, 像元 10 µm, 所以垂直视场约 6.004°. 姿态 heading 0, pitch -90, roll 0. 航向沿轨只是可选按钮, 默认不把像面转到速度方向.
 
 ## 定尺与重采样
 
@@ -87,7 +87,14 @@ H = round(2 * range * tan(vfov/2) / resolution)
 
 `range` 是光轴与椭球的交距. 天底时等于测地高. `round` 用 Python 3 的银行家舍入. 这个尺寸在垂直于视线的切平面上, 侧视时地面 GSD 更粗, 并写入 manifest 的 `sizingPlaneGsdMeters` 与 `centerGroundGsdMeters`.
 
-长边超过上限就报错, 不静默缩小. 页面默认上限 1024, 算法允许调到 16384. 默认分辨率 1000 m/px, 500 km 天底约 70 x 52, 避免一打开就铺很大的画布.
+库函数在只给地面分辨率, 不给宽高时, 仍按切平面定尺, 供和 Python 对照:
+
+```
+W = round(2 * range * tan(hfov/2) / resolution)
+H = round(2 * range * tan(vfov/2) / resolution)
+```
+
+页面不再用这个反推像素数. 照片宽高就是探测器阵列. 上面的 resolution 只作为瓦片级别的输入, 页面传入的是 `H * IFOV`. 长边超过 1024 直接拒绝, 不缩小阵列, 也不另设焦距.
 
 瓦片级别用 `zoom_for_resolution`: 选不粗于目标分辨率的最小级别. EPSG:4326 的 0 级是 2 x 1 张瓦片, Y 自上而下为 XYZ. TMS 只在请求 URL 时翻转 Y.
 
@@ -100,6 +107,7 @@ EPSG:4326 的画布坐标与 Python 一致, 宽视场抽样像素逐值相同. E
 ## 页面
 
 - `camera.html` 从仓库根目录 `CesiumTemplate.html` 起: CesiumJS 1.140 CDN, 沿用仓库已有的 Ion token.
+- 创建 Viewer 之后设置 `viewer.resolutionScale = 2.0`, 让地球画面按 2 倍分辨率绘制. 这只影响 Cesium 视口, 不改变探测器阵列的输出像素数.
 - 不用世界地形. 求交在椭球上, 地形会让脚印和求交看起来不一致.
 - 画出卫星 (示意球体, 不是真实尺寸), 2 天的轨道和星下点轨, 以及当前这一圈的高亮. 矩形近像面, 四条角射线, 星下点连线和地面脚印跟相机走.
 - 底图来自 `viewer.imageryLayers`. 默认不加载 Ion 全球影像 (`baseLayer: false`), 因为这个 token 请求 asset 2 会 404. 启动时有两层可选: 程序化经纬色块 (Geographic, 默认选中) 和经纬网格. 下拉框选中哪一层, 地球就只显示那一层.
@@ -120,6 +128,26 @@ EPSG:4326 的画布坐标与 Python 一致, 宽视场抽样像素逐值相同. E
 node camera/selftest.mjs
 ```
 
-自检覆盖瓦片计数, 射线-椭球, 天底与朝北标架, SSO 根数和 LTAN, JSON 向量优先于 HPR, 程序化瓦片上的 70x52 天底片, 侧视上边缘透明, 以及换影像层后中心像素跟着变, 失败层保持透明.
+自检覆盖瓦片计数, 射线-椭球, 天底与朝北标架, SSO 根数和 LTAN, JSON 向量优先于 HPR, 程序化瓦片上的 70x52 天底片, 侧视上边缘透明, 换影像层后中心像素跟着变, 以及焦距只由阵列, 像元尺寸和 hfov 决定. 不一致的 f 会被拒绝.
+
+## 探测器三参数
+
+理想针孔, 没有辐射, 噪声或衍射. 页面只接受三件事:
+
+- 阵列像素数, 默认 256 x 192
+- 像元尺寸 d, 默认 10 µm
+- 水平视场 hfov, 默认 8°
+
+由此推出, 不再另给输入:
+
+- 焦平面 = 像素数 x d. 默认 2.560 mm x 1.920 mm
+- 垂直视场 `vfov = 2*atan(tan(hfov/2) * H/W)`, 使水平焦距和垂直焦距相同
+- `f = (焦平面宽) / (2*tan(hfov/2))`
+- `IFOV ≈ 该边视场角 / 该边像素数`
+- 拍照时的斜距 H 来自光轴与椭球的交距. `GSD ≈ H * IFOV`, `幅宽 = 2*H*tan(FOV/2)`
+
+输出照片的宽高就是阵列像素数, 不再用地面分辨率反推像素数. 推导出的水平 GSD 只用来选瓦片级别. 阵列长边超过 1024 会直接拒绝.
+
+导出的 `astrox-sensor-camera` 仍带原来的 hfov, vfov, 姿态和向量, Python 工具可以忽略不认识的字段. 另外增加可选 `detector`: 阵列, d, 焦平面, f, IFOV. 若 JSON 里的 `detector.focalLengthMeters` 和这三项不一致, 读取时拒绝, 不会拿这个 f 去改视场.
 
 与 Python `extract_fov_tiles.py` 对过若干姿态: direction/up/right 到 1e-12, 像素交点经纬度到 1e-8, 定尺和中心地面 GSD 一致. 宽视场 lon/lat 色带的抽样像素与 Python 输出逐值相同.
