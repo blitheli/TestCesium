@@ -128,7 +128,8 @@ export function formatTileUrl(template, z, x, y) {
     .replaceAll("{z}", String(z))
     .replaceAll("{zoom}", String(z))
     .replaceAll("{x}", String(x))
-    .replaceAll("{y}", String(y));
+    .replaceAll("{y}", String(y))
+    .replaceAll("{reverseY}", String(y));
 }
 
 function deg(v) {
@@ -180,15 +181,18 @@ export async function extractImagePlane(camera, options) {
   if (!tiles.length) throw new Error("视场脚印没有覆盖到任何瓦片");
   if (tiles.length > maxTiles) {
     throw new Error(
-      `级别 z=${zoom} 需 ${tiles.length} 张瓦片, 超过上限 ${maxTiles}. 请提高瓦片上限, 或改用更粗的分辨率.`
+      `级别 z=${zoom} 需 ${tiles.length} 张瓦片, 超过上限 ${maxTiles}. 成像分辨率已按斜距与 IFOV 选定, 不会自动降低级别.`
     );
   }
 
   const layout = mosaicLayout(tiles, zoom, srs);
   const srcW = layout.cols * tileSize;
   const srcH = layout.rows * tileSize;
-  if (srcW * srcH > 4096 * 4096) {
-    throw new Error(`拼接画布 ${srcW}x${srcH} 过大. 请降低分辨率或瓦片级别.`);
+  const maxMosaic = options.maxMosaicPixels ?? 4096 * 4096;
+  if (srcW * srcH > maxMosaic) {
+    throw new Error(
+      `级别 z=${zoom} 的拼接画布为 ${srcW}x${srcH} (${tiles.length} 张瓦片), 超过上限 ${maxMosaic} 像素. 不会自动降低瓦片级别.`
+    );
   }
   const canvas = new Uint8ClampedArray(srcW * srcH * 4);
   const failed = [];

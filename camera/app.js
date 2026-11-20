@@ -25,7 +25,8 @@ import {
   sampleEcef,
   stateAtJd,
 } from "./orbit.js";
-import { extractImagePlane, renderProceduralTile } from "./resample.js";
+import { renderProceduralTile } from "./resample.js";
+import { captureImagePlane, fixedMatrixFromCamera } from "./capture.js";
 
 const ION_TOKEN =
   "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJqdGkiOiI4M2ZhYzM4My1lN2NhLTRjNTktODY1OC1jZDdmOTU3Y2ZjMGEiLCJpZCI6MTMwNTAsInNjb3BlcyI6WyJhc3IiLCJnYyJdLCJpYXQiOjE1NjI0NzA5NzB9.rRTs6chsWJdo9KNYe5VjJj2fUzMHeniIJvFQOd0aLJU";
@@ -748,26 +749,6 @@ if (typeof Cesium === "undefined") {
     $("summary").textContent = lines.join("\n");
   }
 
-  function detectorRecord(optics, range) {
-    return {
-      widthPx: optics.widthPx,
-      heightPx: optics.heightPx,
-      pixelPitchMeters: optics.pixelPitchMeters,
-      focalPlaneWidthMeters: optics.focalPlaneWidthMeters,
-      focalPlaneHeightMeters: optics.focalPlaneHeightMeters,
-      focalLengthMeters: optics.focalLengthMeters,
-      hfovDeg: optics.hfovDeg,
-      vfovDeg: optics.vfovDeg,
-      ifovHorizontalRad: optics.ifovHorizontalRad,
-      ifovVerticalRad: optics.ifovVerticalRad,
-      rangeMeters: range,
-      gsdHorizontalMeters: gsdFromRange(range, optics.ifovHorizontalRad),
-      gsdVerticalMeters: gsdFromRange(range, optics.ifovVerticalRad),
-      swathHorizontalMeters: swathFromRange(range, optics.hfovRad),
-      swathVerticalMeters: swathFromRange(range, optics.vfovRad),
-    };
-  }
-
   async function capture() {
     const button = $("capture");
     button.disabled = true;
@@ -775,27 +756,28 @@ if (typeof Cesium === "undefined") {
     try {
       const { camera } = cameraAt(viewer.clock.currentTime);
       const optics = camera.detector;
-      const hit = centerRayHit(camera);
-      if (!hit) throw new Error("中心射线未与地球相交, 无法由斜距计算 GSD 和幅宽.");
       const info = selectedLayerInfo();
-      const gsdH = gsdFromRange(hit.t, optics.ifovHorizontalRad);
-      const result = await extractImagePlane(camera, {
+      const projection = info.srs === "EPSG:3857" ? "webmercator" : "geodetic";
+      const result = await captureImagePlane({
+        sensorToFixed: fixedMatrixFromCamera(camera),
+        hfov: optics.hfovDeg,
+        hfovUnit: "deg",
         width: optics.widthPx,
         height: optics.heightPx,
-        resolutionM: gsdH,
+        pixelPitchMeters: optics.pixelPitchMeters,
         maxEdge: PAGE_MAX_ARRAY_EDGE,
         maxTiles: 96,
-        srs: info.srs,
-        scheme: "xyz",
-        tileSize: info.tileSize,
-        minZoom: info.minZoom,
-        maxZoom: info.maxZoom,
-        urlTemplate: info.url,
-        sourceId: info.name,
-        sourceTitle: info.name,
-        detector: detectorRecord(optics, hit.t),
-        getTile,
-        stem: "fov",
+        imagery: {
+          url: info.url,
+          projection,
+          scheme: typeof info.url === "string" && info.url.includes("{reverseY}") ? "tms" : "xyz",
+          tileSize: info.tileSize,
+          minZoom: info.minZoom,
+          maxZoom: info.maxZoom,
+          title: info.name,
+          id: info.name,
+          requestTile: (req) => getTile(req),
+        },
       });
       const canvas = document.createElement("canvas");
       canvas.width = result.width;

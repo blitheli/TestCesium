@@ -28,6 +28,7 @@ import {
 } from "./geometry.js";
 import { ELEMENTS, ltanHoursAt, stateAtJd } from "./orbit.js";
 import { extractImagePlane, renderProceduralTile } from "./resample.js";
+import { captureImagePlane, cameraFromFixedMatrix, fixedMatrixFromCamera } from "./capture.js";
 
 const errors = [];
 
@@ -290,6 +291,90 @@ check("json conflicting f rejected", jsonRejected);
 console.log(
   `  探测器 f=${(rect.focalLengthMeters * 1000).toFixed(3)} mm, vfov=${rect.vfovDeg.toFixed(4)}°, 1024 方阵 f=${(square.focalLengthMeters * 1000).toFixed(3)} mm`
 );
+
+const posed = cameraFromGeodeticHpr(0, 0, 500000, 0, -90, 0, 8, 8);
+const sensorToFixed = fixedMatrixFromCamera(posed);
+const viaMatrix = cameraFromFixedMatrix(sensorToFixed, 8, 8);
+const frameAlign =
+  posed.direction[0] * viaMatrix.direction[0] +
+  posed.direction[1] * viaMatrix.direction[1] +
+  posed.direction[2] * viaMatrix.direction[2];
+const frameUp =
+  posed.up[0] * viaMatrix.up[0] + posed.up[1] * viaMatrix.up[1] + posed.up[2] * viaMatrix.up[2];
+const framePos = Math.hypot(
+  posed.position[0] - viaMatrix.position[0],
+  posed.position[1] - viaMatrix.position[1],
+  posed.position[2] - viaMatrix.position[2]
+);
+check("matrix frame matches camera direction", frameAlign > 1 - 1e-12, frameAlign);
+check("matrix frame matches camera up", frameUp > 1 - 1e-12, frameUp);
+check("matrix frame matches camera position", framePos < 1e-6, framePos);
+
+const planned = await captureImagePlane({
+  sensorToFixed,
+  hfov: 8,
+  imagery: { projection: "geodetic" },
+  planOnly: true,
+});
+const plannedH = planned.manifest.centerRangeMeters;
+const plannedIfov = ((8 * Math.PI) / 180) / 5000;
+const plannedGsd = plannedH * plannedIfov;
+const plannedZoom = zoomForResolution(plannedGsd, "EPSG:4326", planned.manifest.centerHitLonLat[1], 256, 0, 22);
+check("default array is 5000x5000", planned.width === 5000 && planned.height === 5000);
+check("default plan allocates no image", planned.pixels == null);
+check(
+  "default gsd is H times IFOV",
+  Math.abs(planned.manifest.detector.gsdHorizontalMeters - plannedGsd) < 1e-6,
+  planned.manifest.detector.gsdHorizontalMeters
+);
+check("default zoom follows zoomForResolution", planned.manifest.zoom === plannedZoom, `${planned.manifest.zoom} vs ${plannedZoom}`);
+check(
+  "default swath",
+  Math.abs(planned.manifest.detector.swathHorizontalMeters - 2 * plannedH * Math.tan((4 * Math.PI) / 180)) < 1e-3
+);
+check("default plan has no focal length without pitch", planned.manifest.detector.focalLengthMeters == null);
+console.log(
+  `  默认 5000x5000  H=${plannedH.toFixed(3)}  GSD=${planned.manifest.detector.gsdHorizontalMeters.toFixed(3)}  z=${planned.manifest.zoom}`
+);
+
+let overLimit = false;
+try {
+  await captureImagePlane({
+    sensorToFixed,
+    hfov: 8,
+    width: 5000,
+    height: 5000,
+    imagery: { projection: "geodetic", requestTile: async () => new Uint8ClampedArray(256 * 256 * 4) },
+    maxTiles: 1,
+  });
+} catch (err) {
+  overLimit = /z=\d+/.test(err.message) && /不会自动降低/.test(err.message);
+}
+check("over tile limit reports zoom and does not downsample", overLimit);
+
+const small = await captureImagePlane({
+  sensorToFixed,
+  hfov: 8,
+  width: 48,
+  height: 48,
+  pixelPitchMeters: 10e-6,
+  imagery: {
+    projection: "geodetic",
+    title: "procedural",
+    requestTile: async ({ z, x, y, srs, tileSize }) => renderProceduralTile(z, x, y, srs || "EPSG:4326", tileSize || 256, "lonlat"),
+  },
+});
+const centerCol = (small.width / 2) | 0;
+const smallPx = small.pixels[(centerCol * small.width + centerCol) * 4 + 3];
+check("small capture is array sized", small.width === 48 && small.height === 48);
+check("small capture center opaque", smallPx > 200, smallPx);
+check(
+  "small capture zoom matches gsd",
+  small.manifest.zoom ===
+    zoomForResolution(small.manifest.detector.gsdHorizontalMeters, "EPSG:4326", small.manifest.centerHitLonLat[1], 256, 0, 22)
+);
+console.log(`  小阵列 ${small.width}x${small.height} z=${small.manifest.zoom} 命中 ${(small.manifest.hitPixelRatio * 100).toFixed(1)}%`);
+
 console.log(
   `  根数 a=${ELEMENTS.a} e=${ELEMENTS.e} i=${ELEMENTS.iDeg.toFixed(8)} RAAN0=${ELEMENTS.raan0Deg.toFixed(6)} LTAN=${epoch.ltanHours} 周期=${(ELEMENTS.periodSec / 60).toFixed(3)} min`
 );

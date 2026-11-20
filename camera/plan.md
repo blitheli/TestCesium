@@ -128,7 +128,36 @@ EPSG:4326 的画布坐标与 Python 一致, 宽视场抽样像素逐值相同. E
 node camera/selftest.mjs
 ```
 
-自检覆盖瓦片计数, 射线-椭球, 天底与朝北标架, SSO 根数和 LTAN, JSON 向量优先于 HPR, 程序化瓦片上的 70x52 天底片, 侧视上边缘透明, 换影像层后中心像素跟着变, 以及焦距只由阵列, 像元尺寸和 hfov 决定. 不一致的 f 会被拒绝.
+自检覆盖瓦片计数, 射线-椭球, 天底与朝北标架, SSO 根数和 LTAN, JSON 向量优先于 HPR, 程序化瓦片上的 70x52 天底片, 侧视上边缘透明, 换影像层后中心像素跟着变, 焦距只由阵列, 像元尺寸和 hfov 决定, 以及 Matrix4 标架与默认 5000 x 5000 的自动选级. 不一致的 f 会被拒绝.
+
+## 独立拍照接口
+
+`camera/capture.js` 的 `captureImagePlane` 不读取 Viewer. 场景仿真可以直接调用. 演示页把当前影像层翻译成 `imagery` 后再调它, 页面默认阵列仍是 256 x 192, 长边上限仍是 1024.
+
+```javascript
+captureImagePlane({
+  sensorToFixed,          // Matrix4, 列主序 16 数或 Cesium.Matrix4
+  hfov,                   // 水平全视场, hfovUnit 默认 deg
+  width: 5000,            // 阵列宽, 像素
+  height: 5000,           // 阵列高, 像素
+  pixelPitchMeters,       // 可选. 不给就不算焦距
+  imagery: {
+    url,                  // XYZ/TMS, {z}{x}{y}; TMS 用 {reverseY} 或 scheme: "tms"
+    projection,           // "geodetic" 或 "webmercator"
+    tileSize, minZoom, maxZoom, scheme,
+    requestTile           // 可选. 演示页用它包装当前 ImageryProvider
+  },
+  planOnly: false
+})
+```
+
+Matrix4 标架: 列 0 = right (+X), 列 1 = up (+Y), 列 2 = -direction (传感器 +Z), 平移 = 传感器原点.
+
+`vfov = 2*atan(tan(hfov/2) * height/width)`. 输出照片宽高等于阵列. 斜距 H 仍是光轴与 WGS84 椭球的闭式交距. `IFOV = 视场角 / 该边像素数`, `GSD = H * IFOV`, `幅宽 = 2*H*tan(FOV/2)`. 瓦片级别是 `zoomForResolution(GSD, srs, lat, tileSize, minZoom, maxZoom)`, 不另给地面分辨率.
+
+返回 `pixels` (RGBA), `footprint` (GeoJSON) 和 `manifest`. `planOnly: true` 只返回选级, 不分配像面. 模块默认 `maxTiles` 4096, 拼接画布上限 12288 x 12288 像素, 阵列长边上限 8192. 超过就报错, 并写出已选 zoom 和瓦片数, 不降低级别.
+
+与 Python `extract_fov_tiles.py` 对过若干姿态: direction/up/right 到 1e-12, 像素交点经纬度到 1e-8, 定尺和中心地面 GSD 一致. 宽视场 lon/lat 色带的抽样像素与 Python 输出逐值相同.
 
 ## 探测器三参数
 
