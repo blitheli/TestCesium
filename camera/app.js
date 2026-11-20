@@ -25,7 +25,7 @@ import {
   sampleEcef,
   stateAtJd,
 } from "./orbit.js";
-import { renderProceduralTile } from "./resample.js";
+import { flipImageRows, renderProceduralTile } from "./resample.js";
 import { captureImagePlane, fixedMatrixFromCamera, DEFAULT_MAX_TILES } from "./capture.js";
 
 const ION_TOKEN =
@@ -603,15 +603,22 @@ if (typeof Cesium === "undefined") {
     canvas.height = height;
     const ctx = canvas.getContext("2d", { willReadFrequently: true });
     ctx.drawImage(image, 0, 0, width, height);
+    let data;
     try {
-      return ctx.getImageData(0, 0, width, height).data;
+      data = ctx.getImageData(0, 0, width, height).data;
     } catch (_err) {
       throw new Error("无法读取影像像素, 多半是跨域 (CORS). 该影像层的瓦片不允许浏览器读取, 照片不会改用其他层.");
     }
+    // Cesium 为了 WebGL 把 ImageBitmap 上下翻转, 行 0 是南. Canvas 和 HTMLImageElement 已经是北在上.
+    if (typeof ImageBitmap !== "undefined" && image instanceof ImageBitmap) {
+      data = flipImageRows(data, width, height);
+    }
+    return data;
   }
 
   async function getTile(req) {
     const info = selectedLayerInfo();
+    // requestImage 用 XYZ 的 y (北为 0). Cesium 自己把 URL 里的 {reverseY} 换成 TMS 行号, 这里不能再传 yReq.
     const url = tileUrl(info, req.z, req.x, req.y);
     try {
       let image = info.provider.requestImage(req.x, req.y, req.z);

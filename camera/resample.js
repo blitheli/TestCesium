@@ -123,6 +123,21 @@ export function renderProceduralTile(z, x, y, srs, tileSize = DEFAULT_TILE_SIZE,
   return data;
 }
 
+// 把图像行倒过来. Cesium ImageryProvider.loadImage 用 createImageBitmap({imageOrientation:"flipY"})
+// 给 WebGL, ImageBitmap 的第 0 行是南边. 拼接画布约定第 0 行是北边.
+export function flipImageRows(data, width, height) {
+  const stride = width * 4;
+  if (data.length !== stride * height) {
+    throw new Error(`瓦片像素长度 ${data.length} 与 ${width}x${height} 不符`);
+  }
+  const out = new Uint8ClampedArray(data.length);
+  for (let row = 0; row < height; row++) {
+    const src = (height - 1 - row) * stride;
+    out.set(data.subarray(src, src + stride), row * stride);
+  }
+  return out;
+}
+
 export function formatTileUrl(template, z, x, y) {
   return String(template)
     .replaceAll("{z}", String(z))

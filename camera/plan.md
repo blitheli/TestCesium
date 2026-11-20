@@ -74,7 +74,7 @@ dir = normalize(direction + u*tan(hfov/2)*right + v*tan(vfov/2)*up)
 
 像素 `(i, j)` (第 0 行在上) 取像素中心: `u = (i+0.5)/W*2-1`, `v = 1-(j+0.5)/H*2`.
 
-默认水平视场 8°, 阵列 5000 x 5000, 像元 10 µm, 所以垂直视场也是 8°. 姿态 heading 0, pitch -90, roll 0. 航向沿轨只是可选按钮, 默认不把像面转到速度方向.
+演示页默认水平视场 8°, 阵列 1024 x 1024, 像元 10 µm, 所以垂直视场也是 8°. `captureImagePlane` 不传宽高时仍是 5000 x 5000. 姿态 heading 0, pitch -90, roll 0. 航向沿轨只是可选按钮, 默认不把像面转到速度方向.
 
 ## 定尺与重采样
 
@@ -111,7 +111,8 @@ EPSG:4326 的画布坐标与 Python 一致, 宽视场抽样像素逐值相同. E
 - 不用世界地形. 求交在椭球上, 地形会让脚印和求交看起来不一致.
 - 画出卫星 (示意球体, 不是真实尺寸), 2 天的轨道和星下点轨, 以及当前这一圈的高亮. 矩形近像面, 四条角射线, 星下点连线和地面脚印跟相机走.
 - 底图来自 `viewer.imageryLayers`. 默认不加载 Ion 全球影像 (`baseLayer: false`), 因为这个 token 请求 asset 2 会 404. 启动时有两层可选: 程序化经纬色块 (Geographic, 默认选中) 和经纬网格. 下拉框选中哪一层, 地球就只显示那一层.
-- 拍照调用选中层 `imageryProvider.requestImage(x, y, level)`, 和地球用的是同一个 provider. 切片方案由 0 级瓦片数决定: 2x1 为 EPSG:4326, 1x1 为 EPSG:3857. 级别夹在该层的 minimumLevel 和 maximumLevel 之间. 某层 404, 超时或 CORS 时只报错, 不改去画另一层.
+- 拍照调用选中层 `imageryProvider.requestImage(x, y, level)`, 和地球用的是同一个 provider. 传入的 y 是 XYZ (北为 0). URL 里的 `{reverseY}` 由 Cesium 自己换成 TMS 行号, 页面不再翻一次. 切片方案由 0 级瓦片数决定: 2x1 为 EPSG:4326, 1x1 为 EPSG:3857. 级别夹在该层的 minimumLevel 和 maximumLevel 之间. 某层 404, 超时或 CORS 时只报错, 不改去画另一层.
+- Cesium `ImageryProvider.loadImage` 用 `createImageBitmap({imageOrientation:"flipY"})` 给 WebGL, 所以 `requestImage` 返回的 `ImageBitmap` 第 0 行是南边. 直接贴进拼接画布时, 每一行瓦片都上下颠倒, 接缝两侧对不上同一条纬线, 斜向的河和云会看起来左右错开, 边缘还会露出该瓦片另一头的地物. 读像素时只把 `ImageBitmap` 翻回北在上. 程序化层和网格层返回的是 Canvas, 本来就是北在上, 不再翻. 射线求交和 zoom 选择不改.
 - URL 输入用来新增一个 `UrlTemplateImageryProvider` 并立刻选中. `{y}` 在 TMS 下换成 Cesium 的 `{reverseY}`. 它不是拍照的旁路.
 - 跟随相机默认打开. 拖动地球会关掉跟随.
 - 定格只冻结相机的大地位置, 时间继续走, 姿态仍可改. 拍照使用定格位置 (若有) 和当前 HPR.
@@ -128,11 +129,11 @@ EPSG:4326 的画布坐标与 Python 一致, 宽视场抽样像素逐值相同. E
 node camera/selftest.mjs
 ```
 
-自检覆盖瓦片计数, 射线-椭球, 天底与朝北标架, SSO 根数和 LTAN, JSON 向量优先于 HPR, 程序化瓦片上的 70x52 天底片, 侧视上边缘透明, 换影像层后中心像素跟着变, 焦距只由阵列, 像元尺寸和 hfov 决定, 以及 Matrix4 标架与默认 5000 x 5000 的自动选级. 不一致的 f 会被拒绝.
+自检覆盖瓦片计数, 射线-椭球, 天底与朝北标架, SSO 根数和 LTAN, JSON 向量优先于 HPR, 程序化瓦片上的 70x52 天底片, 侧视上边缘透明, 换影像层后中心像素跟着变, 焦距只由阵列, 像元尺寸和 hfov 决定, Matrix4 标架与模块默认 5000 x 5000 的自动选级, 以及瓦片 x/y 和北在上的行号能对上交点 (含 TMS 的 yReq, 以及整张瓦片上下颠倒时必须对不上). 不一致的 f 会被拒绝.
 
 ## 独立拍照接口
 
-`camera/capture.js` 的 `captureImagePlane` 不读取 Viewer. 场景仿真可以直接调用. 演示页把当前影像层翻译成 `imagery` 后再调它. 演示页默认阵列是 5000 x 5000, 长边上限是 8192.
+`camera/capture.js` 的 `captureImagePlane` 不读取 Viewer. 场景仿真可以直接调用. 演示页把当前影像层翻译成 `imagery` 后再调它. 演示页默认阵列是 1024 x 1024, 长边上限是 8192. 模块不传宽高时仍是 5000 x 5000.
 
 ```javascript
 captureImagePlane({
@@ -163,19 +164,19 @@ Matrix4 标架: 列 0 = right (+X), 列 1 = up (+Y), 列 2 = -direction (传感�
 
 理想针孔, 没有辐射, 噪声或衍射. 页面只接受三件事:
 
-- 阵列像素数, 默认 5000 x 5000
+- 阵列像素数. 演示页默认 1024 x 1024, 模块默认 5000 x 5000
 - 像元尺寸 d, 默认 10 µm
 - 水平视场 hfov, 默认 8°
 
 由此推出, 不再另给输入:
 
-- 焦平面 = 像素数 x d. 默认 50 mm x 50 mm
+- 焦平面 = 像素数 x d. 演示页默认 10.24 mm x 10.24 mm. 模块默认 50 mm x 50 mm
 - 垂直视场 `vfov = 2*atan(tan(hfov/2) * H/W)`. 方阵时与 hfov 相同, 默认 8°
-- `f = (焦平面宽) / (2*tan(hfov/2))`. 默认约 357.5 mm
-- `IFOV ≈ 该边视场角 / 该边像素数`. 默认 8°/5000
-- 拍照时的斜距 H 来自光轴与椭球的交距. `GSD ≈ H * IFOV`, `幅宽 = 2*H*tan(FOV/2)`. 500 km 天底时 GSD 约 13.963 m, 自动选级约 z=13
+- `f = (焦平面宽) / (2*tan(hfov/2))`. 1024 方阵约 73.22 mm, 5000 方阵约 357.5 mm
+- `IFOV ≈ 该边视场角 / 该边像素数`. 演示页默认 8°/1024
+- 拍照时的斜距 H 来自光轴与椭球的交距. `GSD ≈ H * IFOV`, `幅宽 = 2*H*tan(FOV/2)`. 500 km 天底, 1024 方阵 GSD 约 68.2 m; 5000 方阵 GSD 约 13.963 m, 自动选级约 z=13
 
-输出照片的宽高就是阵列像素数, 不再用地面分辨率反推像素数. 推导出的水平 GSD 只用来选瓦片级别. 演示页阵列长边超过 8192 会直接拒绝. 5000 x 5000 的首次拍照可能较慢, 页面会提示, 不会降低瓦片级别.
+输出照片的宽高就是阵列像素数, 不再用地面分辨率反推像素数. 推导出的水平 GSD 只用来选瓦片级别. 演示页阵列长边超过 8192 会直接拒绝. 大阵列的首次拍照可能较慢, 页面会提示, 不会降低瓦片级别.
 
 导出的 `astrox-sensor-camera` 仍带原来的 hfov, vfov, 姿态和向量, Python 工具可以忽略不认识的字段. 另外增加可选 `detector`: 阵列, d, 焦平面, f, IFOV. 若 JSON 里的 `detector.focalLengthMeters` 和这三项不一致, 读取时拒绝, 不会拿这个 f 去改视场.
 

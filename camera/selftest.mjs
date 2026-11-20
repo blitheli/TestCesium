@@ -9,8 +9,11 @@ import {
   cameraFromSensorJson,
   centerRayHit,
   deriveDetectorOptics,
+  ecefToGeodetic,
   exportSensorCameraJSON,
+  flipY,
   gsdFromRange,
+  pixelRayDirection,
   srsFromLevel0Tiles,
   swathFromRange,
   assertFocalLengthConsistent,
@@ -19,6 +22,7 @@ import {
   lonlatToTile,
   mapResolutionMercator,
   rayIntersectEllipsoid,
+  tileBounds3857Meters,
   tileBounds4326,
   tileCountX,
   tileCountY,
@@ -27,7 +31,7 @@ import {
   EARTH_RADIUS,
 } from "./geometry.js";
 import { ELEMENTS, ltanHoursAt, stateAtJd } from "./orbit.js";
-import { extractImagePlane, renderProceduralTile } from "./resample.js";
+import { extractImagePlane, flipImageRows, renderProceduralTile } from "./resample.js";
 import { captureImagePlane, cameraFromFixedMatrix, fixedMatrixFromCamera } from "./capture.js";
 
 const errors = [];
@@ -374,6 +378,150 @@ check(
     zoomForResolution(small.manifest.detector.gsdHorizontalMeters, "EPSG:4326", small.manifest.centerHitLonLat[1], 256, 0, 22)
 );
 console.log(`  小阵列 ${small.width}x${small.height} z=${small.manifest.zoom} 命中 ${(small.manifest.hitPixelRatio * 100).toFixed(1)}%`);
+
+function indexTile(z, x, y, tileSize) {
+  const data = new Uint8ClampedArray(tileSize * tileSize * 4);
+  for (let i = 0; i < tileSize * tileSize; i++) {
+    const o = i * 4;
+    data[o] = x & 255;
+    data[o + 1] = (x >> 8) & 255;
+    data[o + 2] = y & 255;
+    data[o + 3] = (y >> 8) & 255;
+  }
+  return data;
+}
+
+function rowTile(tileSize) {
+  const data = new Uint8ClampedArray(tileSize * tileSize * 4);
+  for (let row = 0; row < tileSize; row++) {
+    const v = Math.round(((row + 0.5) / tileSize) * 255);
+    for (let col = 0; col < tileSize; col++) {
+      const o = (row * tileSize + col) * 4;
+      data[o] = v;
+      data[o + 3] = 255;
+    }
+  }
+  return data;
+}
+
+function tileFractions(lon, lat, zoom, srs, x, y) {
+  if (srs === "EPSG:4326") {
+    const [west, south, east, north] = tileBounds4326(x, y, zoom);
+    return [(lon - west) / (east - west), (north - lat) / (north - south)];
+  }
+  const [west, south, east, north] = tileBounds3857Meters(x, y, zoom);
+  const mx = ((lon * Math.PI) / 180) * EARTH_RADIUS;
+  const my = Math.log(Math.tan(Math.PI / 4 + (lat * Math.PI) / 360)) * EARTH_RADIUS;
+  return [(mx - west) / (east - west), (north - my) / (north - south)];
+}
+
+async function sampleIndexAgreement(camera, srs, zoom, scheme) {
+  const tileSize = 64;
+  let badReq = 0;
+  const shot = await extractImagePlane(camera, {
+    width: 72,
+    height: 72,
+    zoom,
+    srs,
+    scheme,
+    tileSize,
+    maxTiles: 256,
+    getTile: async (req) => {
+      const expectedReq = flipY(req.y, req.srs, req.z, scheme);
+      if (req.yReq !== expectedReq) badReq += 1;
+      return { data: indexTile(req.z, req.x, req.y, tileSize), error: null, url: "" };
+    },
+  });
+  let checked = 0;
+  let indexMiss = 0;
+  const w = shot.width;
+  const h = shot.height;
+  for (let j = 0; j < h; j += 2) {
+    for (let i = 0; i < w; i += 2) {
+      const dir = pixelRayDirection(camera, w, h, i, j);
+      const hit = rayIntersectEllipsoid(camera.position, dir);
+      if (!hit) continue;
+      const geo = ecefToGeodetic(hit.point[0], hit.point[1], hit.point[2]);
+      const tile = lonlatToTile(geo.lon, geo.lat, zoom, srs);
+      const [u, v] = tileFractions(geo.lon, geo.lat, zoom, srs, tile.x, tile.y);
+      if (u < 0.2 || u > 0.8 || v < 0.2 || v > 0.8) continue;
+      const o = (j * w + i) * 4;
+      const xGot = shot.image[o] + (shot.image[o + 1] << 8);
+      const yGot = shot.image[o + 2] + (shot.image[o + 3] << 8);
+      checked += 1;
+      if (xGot !== tile.x || yGot !== tile.y) indexMiss += 1;
+    }
+  }
+  return { checked, indexMiss, badReq, zoom: shot.manifest.zoom, tiles: shot.manifest.tileCount };
+}
+
+async function rowOrientationError(camera, srs, zoom, flipSource) {
+  const tileSize = 64;
+  const shot = await extractImagePlane(camera, {
+    width: 72,
+    height: 72,
+    zoom,
+    srs,
+    tileSize,
+    maxTiles: 256,
+    getTile: async (req) => {
+      const north = rowTile(tileSize);
+      return { data: flipSource ? flipImageRows(north, tileSize, tileSize) : north, error: null, url: "" };
+    },
+  });
+  let checked = 0;
+  let errSum = 0;
+  const w = shot.width;
+  const h = shot.height;
+  for (let j = 0; j < h; j += 2) {
+    for (let i = 0; i < w; i += 2) {
+      const dir = pixelRayDirection(camera, w, h, i, j);
+      const hit = rayIntersectEllipsoid(camera.position, dir);
+      if (!hit) continue;
+      const geo = ecefToGeodetic(hit.point[0], hit.point[1], hit.point[2]);
+      const tile = lonlatToTile(geo.lon, geo.lat, zoom, srs);
+      const [, v] = tileFractions(geo.lon, geo.lat, zoom, srs, tile.x, tile.y);
+      if (v < 0.15 || v > 0.85) continue;
+      if (v > 0.4 && v < 0.6) continue;
+      const got = shot.image[(j * w + i) * 4];
+      errSum += Math.abs(got - Math.round(v * 255));
+      checked += 1;
+    }
+  }
+  return { checked, mean: checked ? errSum / checked : 999 };
+}
+
+const indexCam = cameraFromGeodeticHpr(10, -12, 500000, 0, -90, 0, 8, 8);
+const idx4326 = await sampleIndexAgreement(indexCam, "EPSG:4326", 11, "xyz");
+check(
+  "4326 xyz pixel matches tile x/y",
+  idx4326.checked > 40 && idx4326.indexMiss === 0 && idx4326.badReq === 0,
+  JSON.stringify(idx4326)
+);
+const idx3857 = await sampleIndexAgreement(indexCam, "EPSG:3857", 12, "xyz");
+check(
+  "3857 xyz pixel matches tile x/y",
+  idx3857.checked > 40 && idx3857.indexMiss === 0 && idx3857.badReq === 0,
+  JSON.stringify(idx3857)
+);
+const idxTms = await sampleIndexAgreement(indexCam, "EPSG:4326", 11, "tms");
+check(
+  "tms yReq is flipped and mosaic stays xyz",
+  idxTms.checked > 40 && idxTms.indexMiss === 0 && idxTms.badReq === 0,
+  JSON.stringify(idxTms)
+);
+const northUp = await rowOrientationError(indexCam, "EPSG:4326", 11, false);
+const southUp = await rowOrientationError(indexCam, "EPSG:4326", 11, true);
+check("north-up tile rows match latitude", northUp.checked > 20 && northUp.mean < 3, JSON.stringify(northUp));
+check("flipped tile rows do not match latitude", southUp.checked > 20 && southUp.mean > 40, JSON.stringify(southUp));
+const once = rowTile(8);
+const twice = flipImageRows(flipImageRows(once, 8, 8), 8, 8);
+let roundTrip = true;
+for (let i = 0; i < once.length; i++) if (once[i] !== twice[i]) roundTrip = false;
+check("flipImageRows round trip", roundTrip);
+console.log(
+  `  瓦片编号 4326 miss ${idx4326.indexMiss}/${idx4326.checked}, 3857 miss ${idx3857.indexMiss}/${idx3857.checked}, TMS miss ${idxTms.indexMiss}/${idxTms.checked}, 北在上误差 ${northUp.mean.toFixed(2)}, 颠倒误差 ${southUp.mean.toFixed(2)}`
+);
 
 console.log(
   `  根数 a=${ELEMENTS.a} e=${ELEMENTS.e} i=${ELEMENTS.iDeg.toFixed(8)} RAAN0=${ELEMENTS.raan0Deg.toFixed(6)} LTAN=${epoch.ltanHours} 周期=${(ELEMENTS.periodSec / 60).toFixed(3)} min`
