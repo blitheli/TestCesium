@@ -160,12 +160,13 @@
         <label>roll °<input id="roll" type="number" value="0" step="1" /></label>
       </div>
       <div class="grid two">
-        <label>阵列宽 px<input id="arrayW" type="number" value="256" min="2" max="1024" step="1" /></label>
-        <label>阵列高 px<input id="arrayH" type="number" value="192" min="2" max="1024" step="1" /></label>
+        <label>阵列宽 px<input id="arrayW" type="number" value="5000" min="2" max="8192" step="1" /></label>
+        <label>阵列高 px<input id="arrayH" type="number" value="5000" min="2" max="8192" step="1" /></label>
         <label>像元 d µm<input id="pitchUm" type="number" value="10" min="0.1" step="0.1" /></label>
         <label>hfov °<input id="hfov" type="number" value="8" min="0.2" max="120" step="0.1" /></label>
       </div>
       <p id="derived" class="muted"></p>
+      <p class="muted">默认 5000 x 5000 会按成像 GSD 自动选择较细的瓦片级别. 首次拍照可能较慢, 并占用较多内存. 不会为了变快而降低级别.</p>
       <label>影像层
         <select id="imageryLayer"></select>
       </label>

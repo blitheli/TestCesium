@@ -26,7 +26,7 @@ import {
   stateAtJd,
 } from "./orbit.js";
 import { renderProceduralTile } from "./resample.js";
-import { captureImagePlane, fixedMatrixFromCamera } from "./capture.js";
+import { captureImagePlane, fixedMatrixFromCamera, DEFAULT_MAX_TILES } from "./capture.js";
 
 const ION_TOKEN =
   "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJqdGkiOiI4M2ZhYzM4My1lN2NhLTRjNTktODY1OC1jZDdmOTU3Y2ZjMGEiLCJpZCI6MTMwNTAsInNjb3BlcyI6WyJhc3IiLCJnYyJdLCJpYXQiOjE1NjI0NzA5NzB9.rRTs6chsWJdo9KNYe5VjJj2fUzMHeniIJvFQOd0aLJU";
@@ -71,7 +71,7 @@ function jdOf(time) {
   return jdFromDate(Cesium.JulianDate.toDate(time));
 }
 
-const PAGE_MAX_ARRAY_EDGE = 1024;
+const PAGE_MAX_ARRAY_EDGE = 8192;
 
 function readOpticsOrThrow() {
   const widthPx = Math.round(num("arrayW"));
@@ -752,10 +752,14 @@ if (typeof Cesium === "undefined") {
   async function capture() {
     const button = $("capture");
     button.disabled = true;
-    setMessage("正在重采样...", "");
+    setMessage("正在读取阵列...", "");
     try {
       const { camera } = cameraAt(viewer.clock.currentTime);
       const optics = camera.detector;
+      setMessage(
+        `正在重采样 ${optics.widthPx}x${optics.heightPx}. 大阵列会按成像 GSD 选择较细的瓦片级别, 可能较慢并占用较多内存, 不会降低级别.`,
+        ""
+      );
       const info = selectedLayerInfo();
       const projection = info.srs === "EPSG:3857" ? "webmercator" : "geodetic";
       const result = await captureImagePlane({
@@ -766,7 +770,7 @@ if (typeof Cesium === "undefined") {
         height: optics.heightPx,
         pixelPitchMeters: optics.pixelPitchMeters,
         maxEdge: PAGE_MAX_ARRAY_EDGE,
-        maxTiles: 96,
+        maxTiles: DEFAULT_MAX_TILES,
         imagery: {
           url: info.url,
           projection,

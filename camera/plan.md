@@ -74,7 +74,7 @@ dir = normalize(direction + u*tan(hfov/2)*right + v*tan(vfov/2)*up)
 
 像素 `(i, j)` (第 0 行在上) 取像素中心: `u = (i+0.5)/W*2-1`, `v = 1-(j+0.5)/H*2`.
 
-默认水平视场 8°, 阵列 256 x 192, 像元 10 µm, 所以垂直视场约 6.004°. 姿态 heading 0, pitch -90, roll 0. 航向沿轨只是可选按钮, 默认不把像面转到速度方向.
+默认水平视场 8°, 阵列 5000 x 5000, 像元 10 µm, 所以垂直视场也是 8°. 姿态 heading 0, pitch -90, roll 0. 航向沿轨只是可选按钮, 默认不把像面转到速度方向.
 
 ## 定尺与重采样
 
@@ -94,7 +94,7 @@ W = round(2 * range * tan(hfov/2) / resolution)
 H = round(2 * range * tan(vfov/2) / resolution)
 ```
 
-页面不再用这个反推像素数. 照片宽高就是探测器阵列. 上面的 resolution 只作为瓦片级别的输入, 页面传入的是 `H * IFOV`. 长边超过 1024 直接拒绝, 不缩小阵列, 也不另设焦距.
+页面不再用这个反推像素数. 照片宽高就是探测器阵列. 上面的 resolution 只作为瓦片级别的输入, 页面传入的是 `H * IFOV`. 演示页长边上限是 8192, 与 `captureImagePlane` 的 `DEFAULT_MAX_EDGE` 相同. 超过就拒绝, 不缩小阵列, 也不另设焦距.
 
 瓦片级别用 `zoom_for_resolution`: 选不粗于目标分辨率的最小级别. EPSG:4326 的 0 级是 2 x 1 张瓦片, Y 自上而下为 XYZ. TMS 只在请求 URL 时翻转 Y.
 
@@ -132,7 +132,7 @@ node camera/selftest.mjs
 
 ## 独立拍照接口
 
-`camera/capture.js` 的 `captureImagePlane` 不读取 Viewer. 场景仿真可以直接调用. 演示页把当前影像层翻译成 `imagery` 后再调它, 页面默认阵列仍是 256 x 192, 长边上限仍是 1024.
+`camera/capture.js` 的 `captureImagePlane` 不读取 Viewer. 场景仿真可以直接调用. 演示页把当前影像层翻译成 `imagery` 后再调它. 演示页默认阵列是 5000 x 5000, 长边上限是 8192.
 
 ```javascript
 captureImagePlane({
@@ -163,19 +163,19 @@ Matrix4 标架: 列 0 = right (+X), 列 1 = up (+Y), 列 2 = -direction (传感�
 
 理想针孔, 没有辐射, 噪声或衍射. 页面只接受三件事:
 
-- 阵列像素数, 默认 256 x 192
+- 阵列像素数, 默认 5000 x 5000
 - 像元尺寸 d, 默认 10 µm
 - 水平视场 hfov, 默认 8°
 
 由此推出, 不再另给输入:
 
-- 焦平面 = 像素数 x d. 默认 2.560 mm x 1.920 mm
-- 垂直视场 `vfov = 2*atan(tan(hfov/2) * H/W)`, 使水平焦距和垂直焦距相同
-- `f = (焦平面宽) / (2*tan(hfov/2))`
-- `IFOV ≈ 该边视场角 / 该边像素数`
-- 拍照时的斜距 H 来自光轴与椭球的交距. `GSD ≈ H * IFOV`, `幅宽 = 2*H*tan(FOV/2)`
+- 焦平面 = 像素数 x d. 默认 50 mm x 50 mm
+- 垂直视场 `vfov = 2*atan(tan(hfov/2) * H/W)`. 方阵时与 hfov 相同, 默认 8°
+- `f = (焦平面宽) / (2*tan(hfov/2))`. 默认约 357.5 mm
+- `IFOV ≈ 该边视场角 / 该边像素数`. 默认 8°/5000
+- 拍照时的斜距 H 来自光轴与椭球的交距. `GSD ≈ H * IFOV`, `幅宽 = 2*H*tan(FOV/2)`. 500 km 天底时 GSD 约 13.963 m, 自动选级约 z=13
 
-输出照片的宽高就是阵列像素数, 不再用地面分辨率反推像素数. 推导出的水平 GSD 只用来选瓦片级别. 阵列长边超过 1024 会直接拒绝.
+输出照片的宽高就是阵列像素数, 不再用地面分辨率反推像素数. 推导出的水平 GSD 只用来选瓦片级别. 演示页阵列长边超过 8192 会直接拒绝. 5000 x 5000 的首次拍照可能较慢, 页面会提示, 不会降低瓦片级别.
 
 导出的 `astrox-sensor-camera` 仍带原来的 hfov, vfov, 姿态和向量, Python 工具可以忽略不认识的字段. 另外增加可选 `detector`: 阵列, d, 焦平面, f, IFOV. 若 JSON 里的 `detector.focalLengthMeters` 和这三项不一致, 读取时拒绝, 不会拿这个 f 去改视场.
 
