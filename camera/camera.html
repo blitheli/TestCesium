@@ -1,0 +1,219 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>500 km SSO 相机像面</title>
+  <script src="https://cesium.com/downloads/cesiumjs/releases/1.140/Build/Cesium/Cesium.js"></script>
+  <link href="https://cesium.com/downloads/cesiumjs/releases/1.140/Build/Cesium/Widgets/widgets.css" rel="stylesheet" />
+  <style>
+    html, body, #cesiumContainer {
+      width: 100%;
+      height: 100%;
+      margin: 0;
+      padding: 0;
+      overflow: hidden;
+    }
+
+    #panel {
+      position: absolute;
+      top: 12px;
+      left: 12px;
+      z-index: 10;
+      width: min(390px, calc(100vw - 24px));
+      max-height: calc(100% - 120px);
+      overflow: auto;
+      padding: 12px 14px 14px;
+      border-radius: 8px;
+      background: rgba(16, 18, 24, 0.86);
+      color: #f4f7fb;
+      font-family: "Microsoft YaHei", "PingFang SC", "Noto Sans CJK SC", sans-serif;
+      font-size: 13px;
+      line-height: 1.45;
+      box-shadow: 0 12px 40px rgba(0, 0, 0, 0.28);
+    }
+
+    #panel.collapsed {
+      width: auto;
+      max-height: none;
+      overflow: hidden;
+    }
+
+    #panel.collapsed #panelBody { display: none; }
+
+    .header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 8px;
+      margin-bottom: 8px;
+    }
+
+    #panel.collapsed .header { margin-bottom: 0; }
+
+    h1 {
+      margin: 0;
+      font-size: 16px;
+      font-weight: 700;
+    }
+
+    #derived { white-space: pre-line; }
+    #status { margin: 0 0 8px; font-variant-numeric: tabular-nums; }
+    #message { min-height: 1.2em; margin: 8px 0; white-space: pre-wrap; }
+    #message.error { color: #ffb4b4; }
+    #message.ok { color: #b6f3d8; }
+
+    label {
+      display: flex;
+      flex-direction: column;
+      gap: 2px;
+      color: #d5deea;
+      font-size: 12px;
+    }
+
+    .grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr 1fr;
+      gap: 6px 8px;
+      margin-bottom: 8px;
+    }
+
+    .grid.two { grid-template-columns: 1fr 1fr; }
+
+    input, select, button {
+      font: inherit;
+      color: #f4f7fb;
+      background: rgba(255, 255, 255, 0.08);
+      border: 1px solid rgba(255, 255, 255, 0.16);
+      border-radius: 6px;
+    }
+
+    input, select { padding: 4px 6px; width: 100%; box-sizing: border-box; }
+    button { padding: 6px 8px; cursor: pointer; }
+    button:hover { border-color: rgba(85, 214, 190, 0.8); }
+    button:disabled { opacity: 0.45; cursor: default; }
+
+    .buttons, .checks {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 6px;
+      margin: 6px 0;
+    }
+
+    .checks label {
+      flex-direction: row;
+      align-items: center;
+      gap: 6px;
+    }
+
+    .checks input { width: auto; }
+
+    #urlTemplate { width: 100%; margin-bottom: 8px; }
+
+    #previewWrap {
+      margin-top: 4px;
+      padding: 8px;
+      border-radius: 6px;
+      background:
+        linear-gradient(45deg, #2a3140 25%, transparent 25%),
+        linear-gradient(-45deg, #2a3140 25%, transparent 25%),
+        linear-gradient(45deg, transparent 75%, #2a3140 75%),
+        linear-gradient(-45deg, transparent 75%, #2a3140 75%);
+      background-size: 16px 16px;
+      background-position: 0 0, 0 8px, 8px -8px, -8px 0;
+      background-color: #1b212c;
+    }
+
+    #preview {
+      display: block;
+      max-width: 100%;
+      max-height: 200px;
+      margin: 0 auto;
+      image-rendering: pixelated;
+      background: transparent;
+    }
+
+    #summary {
+      margin: 8px 0 0;
+      max-height: 140px;
+      overflow: auto;
+      white-space: pre-wrap;
+      color: #d5deea;
+      font-family: Consolas, "Courier New", monospace;
+      font-size: 11px;
+    }
+  </style>
+</head>
+<body>
+  <div id="cesiumContainer"></div>
+  <aside id="panel">
+    <div class="header">
+      <h1>500 km SSO 相机像面</h1>
+      <button id="toggle" type="button" title="收起面板">−</button>
+    </div>
+    <div id="panelBody">
+      <p class="muted" id="elements"></p>
+      <p id="status">正在放置卫星...</p>
+      <div class="grid">
+        <label>heading °<input id="heading" type="number" value="0" step="1" /></label>
+        <label>pitch °<input id="pitch" type="number" value="-90" step="0.5" /></label>
+        <label>roll °<input id="roll" type="number" value="0" step="1" /></label>
+      </div>
+      <div class="grid two">
+        <label>阵列宽 px<input id="arrayW" type="number" value="1024" min="2" max="8192" step="1" /></label>
+        <label>阵列高 px<input id="arrayH" type="number" value="1024" min="2" max="8192" step="1" /></label>
+        <label>像元 d µm<input id="pitchUm" type="number" value="10" min="0.1" step="0.1" /></label>
+        <label>hfov °<input id="hfov" type="number" value="8" min="0.2" max="120" step="0.1" /></label>
+      </div>
+      <p id="derived" class="muted"></p>
+      <p class="muted">默认 1024 x 1024. 阵列长边最大 8192. 大阵列会按成像 GSD 选择较细的瓦片级别, 首次拍照可能较慢, 并占用较多内存. 不会为了变快而降低级别.</p>
+      <label>影像层
+        <select id="imageryLayer"></select>
+      </label>
+      <p class="muted">拍照只读取这里选中的 ImageryLayer, 地球也只显示这一层.</p>
+      <label>添加 URL 影像层
+        <input id="urlTemplate" type="text" spellcheck="false" value="http://astrox.cn:8768/xyz/&lt;id&gt;/{z}/{x}/{y}.png" />
+      </label>
+      <div class="grid two">
+        <label>新层 SRS
+          <select id="newSrs">
+            <option value="EPSG:4326" selected>EPSG:4326</option>
+            <option value="EPSG:3857">EPSG:3857</option>
+          </select>
+        </label>
+        <label>新层 Y
+          <select id="newScheme">
+            <option value="xyz" selected>xyz</option>
+            <option value="tms">tms</option>
+          </select>
+        </label>
+      </div>
+      <div class="buttons">
+        <button id="addLayer" type="button">添加并选中</button>
+      </div>
+      <div class="checks">
+        <label><input id="follow" type="checkbox" checked /> 跟随卫星</label>
+        <label>倍率<input id="multiplier" type="number" value="120" min="1" step="10" /></label>
+      </div>
+      <div class="buttons">
+        <button id="nadir" type="button">天底</button>
+        <button id="oblique" type="button">侧视</button>
+        <button id="along" type="button">航向沿轨</button>
+        <button id="freeze" type="button">定格当前相机</button>
+      </div>
+      <div class="buttons">
+        <button id="capture" type="button">拍照</button>
+        <button id="savePng" type="button" disabled>下载 PNG</button>
+        <button id="saveManifest" type="button" disabled>下载 manifest</button>
+        <button id="saveCamera" type="button">导出相机 JSON</button>
+        <button id="saveFootprint" type="button">导出脚印</button>
+      </div>
+      <p id="estimate" class="muted"></p>
+      <p id="message"></p>
+      <div id="previewWrap"><img id="preview" alt="像面重采样照片" /></div>
+      <pre id="summary"></pre>
+    </div>
+  </aside>
+  <script type="module" src="./app.js"></script>
+</body>
+</html>
