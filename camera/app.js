@@ -426,12 +426,24 @@ if (typeof Cesium === "undefined") {
       const { camera } = cameraAt(viewer.clock.currentTime);
       const hit = centerRayHit(camera);
       const range = hit ? hit.t : Number.NaN;
-      const info = selectedLayerInfo();
+      let info;
+      try {
+        info = selectedLayerInfo();
+      } catch (err) {
+        info = {
+          name: (state.selectedLayer && state.selectedLayer.name) || "影像层",
+          srs: "非全球 XYZ",
+          tileSize: 256,
+          minZoom: 0,
+          maxZoom: 22,
+        };
+      }
       const gsdH = Number.isFinite(range) ? gsdFromRange(range, optics.ifovHorizontalRad) : Number.NaN;
       const gsdV = Number.isFinite(range) ? gsdFromRange(range, optics.ifovVerticalRad) : Number.NaN;
-      const zoom = Number.isFinite(gsdH)
-        ? zoomForResolution(gsdH, info.srs, hit ? hit.lat : camera.lat, info.tileSize, info.minZoom, info.maxZoom)
-        : null;
+      const zoom =
+        info.srs && info.srs.startsWith("EPSG") && Number.isFinite(gsdH)
+          ? zoomForResolution(gsdH, info.srs, hit ? hit.lat : camera.lat, info.tileSize, info.minZoom, info.maxZoom)
+          : null;
       const swathH = Number.isFinite(range) ? swathFromRange(range, optics.hfovRad) : Number.NaN;
       const swathV = Number.isFinite(range) ? swathFromRange(range, optics.vfovRad) : Number.NaN;
       const mm = (m) => (m * 1000).toFixed(3);
@@ -519,6 +531,149 @@ if (typeof Cesium === "undefined") {
     const panel = $("panel");
     const collapsed = panel.classList.toggle("collapsed");
     $("toggle").textContent = collapsed ? "+" : "−";
+    liveWidget.useDefaultRenderLoop = !collapsed;
+    if (!collapsed) {
+      liveSize.width = 0;
+      requestAnimationFrame(() => liveWidget.resize());
+    }
+  });
+
+  const LIVE_WIDTH = 300;
+  const liveSize = { width: 0, height: 0 };
+  const liveDest = new Cesium.Cartesian3();
+  const liveDirection = new Cesium.Cartesian3();
+  const liveUp = new Cesium.Cartesian3();
+  $("previewWrap").style.width = `${LIVE_WIDTH}px`;
+  $("previewWrap").style.height = `${LIVE_WIDTH}px`;
+  let liveWidget;
+  try {
+    liveWidget = new Cesium.CesiumWidget($("previewWrap"), {
+      scene3DOnly: true,
+      baseLayer: false,
+      imageryProvider: false,
+    });
+  } catch (_err) {
+    liveWidget = new Cesium.CesiumWidget($("previewWrap"));
+  }
+  if (liveWidget.scene.imageryLayers.length) liveWidget.scene.imageryLayers.removeAll();
+  liveWidget.resolutionScale = 1;
+  liveWidget.scene.globe.enableLighting = false;
+  liveWidget.scene.globe.showGroundAtmosphere = false;
+  liveWidget.scene.globe.depthTestAgainstTerrain = false;
+  liveWidget.scene.globe.baseColor = Cesium.Color.fromCssColorString("#0b3d5c");
+  liveWidget.scene.globe.maximumScreenSpaceError = 4;
+  liveWidget.scene.fog.enabled = false;
+  liveWidget.scene.skyAtmosphere.show = false;
+  liveWidget.scene.sun.show = false;
+  liveWidget.scene.moon.show = false;
+  if (liveWidget.scene.skyBox) liveWidget.scene.skyBox.show = false;
+  liveWidget.scene.backgroundColor = Cesium.Color.fromCssColorString("#0b3d5c");
+  const liveController = liveWidget.scene.screenSpaceCameraController;
+  liveController.enableRotate = false;
+  liveController.enableTranslate = false;
+  liveController.enableZoom = false;
+  liveController.enableTilt = false;
+  liveController.enableLook = false;
+
+  let liveSyncToken = 0;
+
+  function ensureLiveSize(optics) {
+    const height = Math.max(1, Math.round((LIVE_WIDTH * optics.heightPx) / optics.widthPx));
+    if (liveSize.width === LIVE_WIDTH && liveSize.height === height) return;
+    liveSize.width = LIVE_WIDTH;
+    liveSize.height = height;
+    const wrap = $("previewWrap");
+    wrap.style.width = `${LIVE_WIDTH}px`;
+    wrap.style.height = `${height}px`;
+    liveWidget.resize();
+    const frustum = liveWidget.scene.camera.frustum;
+    if (frustum instanceof Cesium.PerspectiveFrustum) frustum.aspectRatio = LIVE_WIDTH / height;
+  }
+
+  function pickerViewModelFor(layer) {
+    const picker = viewer.baseLayerPicker && viewer.baseLayerPicker.viewModel;
+    if (!picker) return null;
+    const models = picker.imageryProviderViewModels || [];
+    if (layer && layer.name) {
+      const named = models.find((model) => model.name === layer.name);
+      if (named) return named;
+    }
+    const selected = picker.selectedImagery;
+    if (selected && layer && (!layer.name || selected.name === layer.name)) return selected;
+    return null;
+  }
+
+  function attachLiveFactory(layer) {
+    if (!layer || layer.liveFactory) return;
+    const model = pickerViewModelFor(layer);
+    if (!model || typeof model.creationCommand !== "function") return;
+    const command = model.creationCommand;
+    layer.liveFactory = () => command();
+  }
+
+  function syncLiveImagery(layer) {
+    const token = ++liveSyncToken;
+    attachLiveFactory(layer);
+    const layers = liveWidget.scene.imageryLayers;
+    let created = null;
+    try {
+      created = layer && layer.liveFactory ? layer.liveFactory() : null;
+    } catch (err) {
+      setMessage(err && err.message ? err.message : String(err), "error");
+      return;
+    }
+    if (!created) return;
+    state.liveLabel = (layer && (layer.name || layerLabel(layer, 0))) || "";
+    Promise.resolve(created)
+      .then((provider) => {
+        if (token !== liveSyncToken || !provider) return;
+        while (layers.length) layers.remove(layers.get(0), true);
+        layers.addImageryProvider(provider);
+        liveWidget.scene.requestRender();
+      })
+      .catch((err) => {
+        if (token !== liveSyncToken) return;
+        setMessage(err && err.message ? err.message : String(err), "error");
+      });
+  }
+
+  let refreshingLayerList = false;
+
+  liveWidget.scene.preRender.addEventListener(() => {
+    try {
+      const optics = readOptics();
+      ensureLiveSize(optics);
+      const { camera } = cameraAt(viewer.clock.currentTime);
+      Cesium.Cartesian3.fromElements(camera.position[0], camera.position[1], camera.position[2], liveDest);
+      Cesium.Cartesian3.fromElements(camera.direction[0], camera.direction[1], camera.direction[2], liveDirection);
+      Cesium.Cartesian3.fromElements(camera.up[0], camera.up[1], camera.up[2], liveUp);
+      liveWidget.scene.camera.setView({
+        destination: liveDest,
+        orientation: { direction: liveDirection, up: liveUp },
+      });
+      const frustum = liveWidget.scene.camera.frustum;
+      if (frustum instanceof Cesium.PerspectiveFrustum) {
+        frustum.fov = camera.vfov;
+        frustum.aspectRatio = optics.widthPx / optics.heightPx;
+        frustum.near = 1;
+        frustum.far = 5.0e7;
+      }
+    } catch (_err) {
+      // 阵列输入不合法时保留上一帧.
+    }
+  });
+
+  let liveFrames = 0;
+  let liveFpsStamp = performance.now();
+  liveWidget.scene.postRender.addEventListener(() => {
+    liveFrames += 1;
+    const now = performance.now();
+    const elapsed = now - liveFpsStamp;
+    if (elapsed < 500) return;
+    const fps = (liveFrames * 1000) / elapsed;
+    $("liveFps").textContent = `实时像面 ${LIVE_WIDTH} px · ${state.liveLabel || ""} · ${fps.toFixed(0)} fps`;
+    liveFrames = 0;
+    liveFpsStamp = now;
   });
 
   function layerLabel(layer, index) {
@@ -532,17 +687,34 @@ if (typeof Cesium === "undefined") {
   }
 
   function refreshLayerList() {
+    refreshingLayerList = true;
     const select = $("imageryLayer");
     const current = state.selectedLayer;
     select.innerHTML = "";
     for (let i = 0; i < viewer.imageryLayers.length; i++) {
       const layer = viewer.imageryLayers.get(i);
       const option = document.createElement("option");
-      option.value = String(i);
+      option.value = layerKey(layer);
       option.textContent = layerLabel(layer, i);
       if (layer === current) option.selected = true;
       select.appendChild(option);
     }
+    refreshingLayerList = false;
+  }
+
+  let layerSerial = 1;
+  function layerKey(layer) {
+    if (!layer.liveKey) layer.liveKey = String(layerSerial++);
+    return layer.liveKey;
+  }
+
+  function layerByKey(key) {
+    const collection = viewer.imageryLayers;
+    for (let i = 0; i < collection.length; i++) {
+      const layer = collection.get(i);
+      if (layer.liveKey === key) return layer;
+    }
+    return null;
   }
 
   function selectLayer(layer) {
@@ -554,6 +726,7 @@ if (typeof Cesium === "undefined") {
     }
     if (collection.indexOf(layer) !== collection.length - 1) collection.raiseToTop(layer);
     refreshLayerList();
+    syncLiveImagery(layer);
     updateEstimate();
   }
 
@@ -665,6 +838,7 @@ if (typeof Cesium === "undefined") {
   }
 
   viewer.imageryLayers.layerAdded.addEventListener((layer) => {
+    attachLiveFactory(layer);
     refreshLayerList();
     if (!state.suppressLayerPick) selectLayer(layer);
   });
@@ -679,22 +853,26 @@ if (typeof Cesium === "undefined") {
 
   const proceduralLayer = viewer.imageryLayers.addImageryProvider(createProceduralImageryProvider());
   proceduralLayer.name = "程序化经纬色块";
-  const gridLayer = viewer.imageryLayers.addImageryProvider(
-    new Cesium.GridImageryProvider({
+  proceduralLayer.liveFactory = () => createProceduralImageryProvider();
+  function createGridImageryProvider() {
+    return new Cesium.GridImageryProvider({
       tilingScheme: new Cesium.GeographicTilingScheme(),
       cells: 4,
       color: Cesium.Color.WHITE,
       glowColor: Cesium.Color.WHITE.withAlpha(0.2),
       glowWidth: 1,
       backgroundColor: Cesium.Color.fromCssColorString("#0b3d5c"),
-    })
-  );
+    });
+  }
+  const gridLayer = viewer.imageryLayers.addImageryProvider(createGridImageryProvider());
   gridLayer.name = "经纬网格";
+  gridLayer.liveFactory = () => createGridImageryProvider();
   state.suppressLayerPick = false;
   selectLayer(proceduralLayer);
 
   $("imageryLayer").addEventListener("change", () => {
-    const layer = viewer.imageryLayers.get(Number($("imageryLayer").value));
+    if (refreshingLayerList) return;
+    const layer = layerByKey($("imageryLayer").value);
     if (layer) selectLayer(layer);
   });
 
@@ -721,6 +899,13 @@ if (typeof Cesium === "undefined") {
       });
       const layer = viewer.imageryLayers.addImageryProvider(provider);
       layer.name = `URL ${url.slice(0, 42)}`;
+      layer.liveFactory = () =>
+        new Cesium.UrlTemplateImageryProvider({
+          url,
+          tilingScheme: srs === "EPSG:4326" ? new Cesium.GeographicTilingScheme() : new Cesium.WebMercatorTilingScheme(),
+          maximumLevel: 18,
+          credit: url,
+        });
       if (provider.errorEvent) {
         provider.errorEvent.addEventListener((error) => {
           if (state.selectedLayer === layer) {

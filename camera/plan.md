@@ -114,6 +114,8 @@ EPSG:4326 的画布坐标与 Python 一致, 宽视场抽样像素逐值相同. E
 - 拍照调用选中层 `imageryProvider.requestImage(x, y, level)`, 和地球用的是同一个 provider. 传入的 y 是 XYZ (北为 0). URL 里的 `{reverseY}` 由 Cesium 自己换成 TMS 行号, 页面不再翻一次. 切片方案由 0 级瓦片数决定: 2x1 为 EPSG:4326, 1x1 为 EPSG:3857. 级别夹在该层的 minimumLevel 和 maximumLevel 之间. 某层 404, 超时或 CORS 时只报错, 不改去画另一层.
 - Cesium `ImageryProvider.loadImage` 用 `createImageBitmap({imageOrientation:"flipY"})` 给 WebGL, 所以 `requestImage` 返回的 `ImageBitmap` 第 0 行是南边. 直接贴进拼接画布时, 每一行瓦片都上下颠倒, 接缝两侧对不上同一条纬线, 斜向的河和云会看起来左右错开, 边缘还会露出该瓦片另一头的地物. 读像素时只把 `ImageBitmap` 翻回北在上. 程序化层和网格层返回的是 Canvas, 本来就是北在上, 不再翻. 射线求交和 zoom 选择不改.
 - URL 输入用来新增一个 `UrlTemplateImageryProvider` 并立刻选中. `{y}` 在 TMS 下换成 Cesium 的 `{reverseY}`. 它不是拍照的旁路.
+- `#previewWrap` 是宽 300 px 的实时像面, 另开一个不接收鼠标的 CesiumWidget. 每帧用当前卫星 (或定格位置) 和 HPR 设置相机, 垂直视场用 vfov, 画布高按阵列纵横比从 300 px 推出. 影像跟着下拉框里选中的那一层走: 程序化色块和经纬网格各建一份 provider, 底图选择器里的 ion 图层再调用一次它的 creationCommand, 避免两个地球共用同一次瓦片请求. 这里只画地球, 不做像面重采样, 目标是 30 fps 以上. 拍照按钮仍输出阵列全分辨率, 结果显示在实时窗口下面.
+- 仿真开始时时钟倍率为 10.
 - 跟随相机默认打开. 拖动地球会关掉跟随.
 - 定格只冻结相机的大地位置, 时间继续走, 姿态仍可改. 拍照使用定格位置 (若有) 和当前 HPR.
 - 侧视按钮按当前位置搜索 pitch, 使视场上边缘 (`v = +1`) 落在地平线外, 下边缘和光轴仍打到椭球.
