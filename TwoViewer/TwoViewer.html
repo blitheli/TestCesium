@@ -1,17 +1,21 @@
 <!DOCTYPE html>
 <html lang="en">
+
 <head>
   <meta charset="utf-8">
   <script src="https://cesium.com/downloads/cesiumjs/releases/1.140/Build/Cesium/Cesium.js"></script>
   <link href="https://cesium.com/downloads/cesiumjs/releases/1.140/Build/Cesium/Widgets/widgets.css" rel="stylesheet">
   <style>
-    html, body, #cesiumContainer {
+    html,
+    body,
+    #cesiumContainer {
       width: 100%;
       height: 100%;
       margin: 0;
       padding: 0;
       overflow: hidden;
     }
+
     #miniViewer {
       position: absolute;
       top: 10px;
@@ -19,6 +23,7 @@
       width: 300px;
       height: 300px;
     }
+
     #downloadButton {
       position: absolute;
       top: 10px;
@@ -30,12 +35,13 @@
     }
   </style>
 </head>
+
 <body>
   <div id="cesiumContainer"></div>
   <div id="miniViewer"></div>
   <div id="downloadButton">下载</div>
   <script type="module">
-    
+
     /*
         下载按钮，点击后，调用captureHighResImage函数，捕获小窗口的图像，并下载。
     */
@@ -49,7 +55,7 @@
     /*
         使用两个Viewer 实现画中画功能。
     */
-    
+
     Cesium.Ion.defaultAccessToken = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJqdGkiOiI4M2ZhYzM4My1lN2NhLTRjNTktODY1OC1jZDdmOTU3Y2ZjMGEiLCJpZCI6MTMwNTAsInNjb3BlcyI6WyJhc3IiLCJnYyJdLCJpYXQiOjE1NjI0NzA5NzB9.rRTs6chsWJdo9KNYe5VjJj2fUzMHeniIJvFQOd0aLJU";
 
     // 主Viewer
@@ -59,40 +65,51 @@
     });
     viewer.scene.globe.enableLighting = true;
     // 1. 开启针对高分辨率屏幕的像素比例优化
-    viewer.resolutionScale = window.devicePixelRatio; 
+    viewer.resolutionScale = window.devicePixelRatio;
 
     // 2. 告诉 Cesium 使用浏览器推荐的分辨率（关闭此选项可以强制渲染高质量）
     viewer.useBrowserRecommendedResolution = false;
 
     //=================================================================================
     // 小窗口，同样是Viewer，但是不显示任何UI，只显示地图。
-    const miniViewer = new Cesium.Viewer("miniViewer", {
-      infoBox: false,
-      baseLayer: viewer.baseLayer,
-      baseLayerPicker: false,
-      timeline: false,
-      animation: false,
-      geocoder: false,
-      homeButton: false,
-      fullscreenButton: false,
-      sceneModePicker: false,
-      navigationHelpButton: false,
-      infoBox: false,
-      selectionIndicator: false,
+    const miniViewer = new Cesium.CesiumWidget("miniViewer", {
+      scene3DOnly: true,
+      baseLayer: false,
+      //imageryProvider: false,
+      contextOptions: {
+        webgl: {
+          preserveDrawingBuffer: true, // 高分拍照保留缓冲区
+        },
+      },
     });
+
+    // ArcGIS MapServer 的路径是 /tile/{level}/{row}/{col}, 对应 {z}/{y}/{x}
+    const imageryProvider = new Cesium.UrlTemplateImageryProvider({
+      url: "https://services.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}",
+      maximumLevel: 18,
+    });
+    miniViewer.scene.imageryLayers.addImageryProvider(imageryProvider);
+
+    //if (miniViewer.scene.imageryLayers.length) miniViewer.scene.imageryLayers.removeAll();
+    miniViewer.resolutionScale = 1;
     miniViewer.scene.globe.enableLighting = false;
-    miniViewer.scene.requestRenderMode = true;
+    miniViewer.scene.globe.showGroundAtmosphere = false;
+    miniViewer.scene.globe.depthTestAgainstTerrain = false;
+    miniViewer.scene.globe.baseColor = Cesium.Color.fromCssColorString("#0b3d5c");
+    miniViewer.scene.globe.maximumScreenSpaceError = 4;
     miniViewer.scene.fog.enabled = false;
     miniViewer.scene.skyAtmosphere.show = false;
-    miniViewer.scene.globe.showGroundAtmosphere = false;
-
-    // 1. 开启针对高分辨率屏幕的像素比例优化
-    miniViewer.resolutionScale = window.devicePixelRatio; 
+    miniViewer.scene.sun.show = false;
+    miniViewer.scene.moon.show = false;
+    if (miniViewer.scene.skyBox) miniViewer.scene.skyBox.show = false;
+    miniViewer.scene.backgroundColor = Cesium.Color.fromCssColorString("#0b3d5c");
     // 关闭小窗口的旋转、缩放、平移功能
-    const cameraController = miniViewer.scene.screenSpaceCameraController;
-    cameraController.enableRotate = false;
-    cameraController.enableZoom = false;
-    cameraController.enablePan = false;
+    const liveController = miniViewer.scene.screenSpaceCameraController;
+    liveController.enableRotate = false;
+    liveController.enableTranslate = false;
+    liveController.enableZoom = false;
+    liveController.enableTilt = false;
+    liveController.enableLook = false;
 
     // 设置相机的位置 缓慢移动
     const startTime = Cesium.JulianDate.clone(viewer.clock.currentTime);
@@ -123,22 +140,23 @@
     }
 
     // 获取小窗口的相机视角
-   const frustum = miniViewer.camera.frustum;
-   if (!(frustum instanceof Cesium.PerspectiveFrustum)) {
-    console.log("frustum is not a PerspectiveFrustum");
-   }
-   const aspect = frustum.aspect;
-   frustum.fov = 0.3;
-   //console.log(aspect, fov, near, far);
+    const frustum = miniViewer.camera.frustum;
+    if (!(frustum instanceof Cesium.PerspectiveFrustum)) {
+      console.log("frustum is not a PerspectiveFrustum");
+    }
+    const aspect = frustum.aspect;
+    frustum.fov = 0.3;
+    //console.log(aspect, fov, near, far);
 
-   updateMiniCamera();
-   viewer.clock.onTick.addEventListener(updateMiniCamera);
+    updateMiniCamera();
+    viewer.clock.onTick.addEventListener(updateMiniCamera);
 
-   // 显示帧率
-   // 开启帧率显示（默认显示在画布右上角）
-  viewer.scene.debugShowFramesPerSecond = true;
+    // 显示帧率
+    // 开启帧率显示（默认显示在画布右上角）
+    viewer.scene.debugShowFramesPerSecond = true;
 
 
   </script>
 </body>
+
 </html>

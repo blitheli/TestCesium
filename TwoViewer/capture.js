@@ -17,6 +17,7 @@ async function captureHighResImage(viewer, targetWidth = 2000) {
       viewer.resolutionScale = targetWidth / cssWidth;
   
       // 3. 调高瓦片加载精细度，确保 2000px 放大后地面纹理依然清晰
+      // 这个参数真正把层级往下推，（默认是 2），允许的屏幕误差更小，四叉树才会选择更细的地形瓦片
       scene.globe.maximumScreenSpaceError = 0.5;
   
       // 4. 强制同步渲染一帧并等待瓦片就绪
