@@ -69,20 +69,26 @@ function downloadImage(dataUrl, filename) {
 //=================================================================================
 /**
  * 获取小窗口的Viewer，用于画中画功能。未设置相机, 和图层(默认)
+ * 必须和主 Viewer 共用同一个 Cesium.SharedContext。Cesium 1.140 的 ResourceCache
+ * 只按 URL 缓存纹理、顶点缓冲和着色器，不区分 WebGL context。小窗再开一个 context
+ * 时，同一份 glTF / Entity 会把主窗口的 GPU 对象绑到小窗上。
+ * @param {string} id
+ * @param {Cesium.SharedContext} sharedContext
  * @returns {Cesium.CesiumWidget}
  */
-function getMiniViewer(id) {
+function getMiniViewer(id, sharedContext) {
+  if (!(sharedContext instanceof Cesium.SharedContext)) {
+    throw new Error("小窗口必须和主 Viewer 共用 Cesium.SharedContext, 不能再开一个 WebGL context");
+  }
 
   // 小窗口，同样是Viewer，但是不显示任何UI，只显示地图。
+  // contextOptions 传入 SharedContext 实例时，Scene 不会再 getContext("webgl2")，
+  // 而是在这块画布上取 2d context，由共享的 WebGL 画布画完再贴过来。
   const miniViewer = new Cesium.CesiumWidget(id, {
     scene3DOnly: true,
     baseLayer: false,
     //imageryProvider: false,
-    contextOptions: {
-      webgl: {
-        preserveDrawingBuffer: true, // 高分拍照保留缓冲区
-      },
-    },
+    contextOptions: sharedContext,
   });
 
   //如果主窗口和副窗口使用的是同一个在线底图，直接复用同一个 imageryProvider 实例

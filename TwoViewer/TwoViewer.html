@@ -58,10 +58,24 @@
 
     Cesium.Ion.defaultAccessToken = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJqdGkiOiI4M2ZhYzM4My1lN2NhLTRjNTktODY1OC1jZDdmOTU3Y2ZjMGEiLCJpZCI6MTMwNTAsInNjb3BlcyI6WyJhc3IiLCJnYyJdLCJpYXQiOjE1NjI0NzA5NzB9.rRTs6chsWJdo9KNYe5VjJj2fUzMHeniIJvFQOd0aLJU";
 
+    // 主窗口和小窗必须共用一个 WebGL context。各开一个 context 时，
+    // 小窗加载与主窗口相同的模型 / Entity 会触发 framebufferTexture2D、
+    // bindTexture、drawElements 的 "object does not belong to this context"。
+    const sharedContext = new Cesium.SharedContext({
+      contextOptions: {
+        webgl: {
+          alpha: false,
+          stencil: true,
+          preserveDrawingBuffer: true,
+        },
+      },
+    });
+
     // 主Viewer
     const viewer = new Cesium.Viewer("cesiumContainer", {
       //terrain: Cesium.Terrain.fromWorldTerrain(),
       shouldAnimate: true,
+      contextOptions: sharedContext,
     });
     viewer.scene.globe.enableLighting = true;
     // 1. 开启针对高分辨率屏幕的像素比例优化
@@ -72,7 +86,7 @@
 
 
     // 3. 获取小窗口的Viewer
-    const miniViewer = getMiniViewer("miniViewer");
+    const miniViewer = getMiniViewer("miniViewer", sharedContext);
 
     // 设置相机的位置 缓慢移动
     const startTime = Cesium.JulianDate.clone(viewer.clock.currentTime);
