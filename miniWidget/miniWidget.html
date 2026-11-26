@@ -1,0 +1,147 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+  <meta charset="utf-8">
+  <script src="https://cesium.com/downloads/cesiumjs/releases/1.140/Build/Cesium/Cesium.js"></script>
+  <link href="https://cesium.com/downloads/cesiumjs/releases/1.140/Build/Cesium/Widgets/widgets.css" rel="stylesheet">
+  <style>
+    html,
+    body,
+    #cesiumContainer {
+      width: 100%;
+      height: 100%;
+      margin: 0;
+      padding: 0;
+      overflow: hidden;
+    }
+
+    #miniViewer {
+      position: absolute;
+      top: 10px;
+      left: 10px;
+      width: 300px;
+      height: 300px;
+    }
+
+    #downloadButton {
+      position: absolute;
+      top: 10px;
+      left: 400px;
+      width: 100px;
+      height: 30px;
+      background-color: #121312;
+      color: white;
+    }
+  </style>
+</head>
+
+<body>
+  <div id="cesiumContainer"></div>
+  <div id="miniViewer"></div>
+  <div id="downloadButton">下载</div>
+  <script type="module">
+
+    /*
+        下载按钮，点击后，调用captureHighResImage函数，捕获小窗口的图像，并下载。
+    */
+    const downloadButton = document.getElementById("downloadButton");
+    downloadButton.addEventListener("click", () => {
+      captureHighResImage(miniViewer, 3000);
+    });
+
+    import { captureHighResImage, getMiniViewer } from "./capture.js";
+
+    /*
+        使用两个Viewer 实现画中画功能。
+    */
+
+    Cesium.Ion.defaultAccessToken = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJqdGkiOiI4M2ZhYzM4My1lN2NhLTRjNTktODY1OC1jZDdmOTU3Y2ZjMGEiLCJpZCI6MTMwNTAsInNjb3BlcyI6WyJhc3IiLCJnYyJdLCJpYXQiOjE1NjI0NzA5NzB9.rRTs6chsWJdo9KNYe5VjJj2fUzMHeniIJvFQOd0aLJU";
+
+    // 主窗口和小窗必须共用一个 WebGL context。各开一个 context 时，
+    // 小窗加载与主窗口相同的模型 / Entity 会触发 framebufferTexture2D、
+    // bindTexture、drawElements 的 "object does not belong to this context"。
+    const sharedContext = new Cesium.SharedContext({
+      contextOptions: {
+        webgl: {
+          alpha: false,
+          stencil: true,
+          preserveDrawingBuffer: true,
+        },
+      },
+    });
+
+    // 主Viewer
+    const viewer = new Cesium.Viewer("cesiumContainer", {
+      shouldAnimate: true,
+      contextOptions: sharedContext,
+    });
+    viewer.scene.globe.enableLighting = true;
+    // 1. 开启针对高分辨率屏幕的像素比例优化
+    viewer.resolutionScale = window.devicePixelRatio;
+    // 2. 告诉 Cesium 使用浏览器推荐的分辨率（关闭此选项可以强制渲染高质量）
+    viewer.useBrowserRecommendedResolution = false;
+
+    // 加载模型
+    const czml = await Cesium.CzmlDataSource.load("/SampleData/simple.czml");
+    await viewer.dataSources.add(czml);
+
+    //===========================================================================
+    // 3. 获取小窗口的Viewer
+    const miniViewer = getMiniViewer("miniViewer", sharedContext);
+
+    // 获取CZML中的Geoeye1实体
+    const sourceGeoeye1 = czml.entities.getById("Satellite/Geoeye1");
+    if (!Cesium.defined(sourceGeoeye1)) {
+      throw new Error("CZML 中找不到 Satellite/Geoeye1");
+    }
+
+    // 复用主窗 Entity 的 position / orientation / model, 只在小窗再挂一份可视化.
+    const geoeye1 = miniViewer.entities.add({
+      id: "Satellite/Geoeye1",
+      availability: sourceGeoeye1.availability,
+      position: sourceGeoeye1.position,
+      orientation: sourceGeoeye1.orientation,
+      model: sourceGeoeye1.model,
+    });
+    miniViewer.clock.shouldAnimate = false;
+
+    const cameraOffset = new Cesium.Cartesian3(0, 0, 10);
+    const modelMatrix = new Cesium.Matrix4();
+
+    // 更新小窗口的相机视角
+    function updateMiniCamera() {
+      const time = viewer.clock.currentTime;
+      Cesium.JulianDate.clone(time, miniViewer.clock.currentTime);
+
+      // Entity 没有常驻 modelMatrix, 用 computeModelMatrix(time) 取当前姿态.
+      if (!geoeye1.computeModelMatrix(time, modelMatrix)) {
+        return;
+      }
+      miniViewer.camera.lookAtTransform(modelMatrix, cameraOffset);
+      // 更新小窗口的相机视角
+      miniViewer.scene.requestRender();
+    }
+
+    // 获取小窗口的相机视角
+    const frustum = miniViewer.camera.frustum;
+    if (!(frustum instanceof Cesium.PerspectiveFrustum)) {
+      console.log("frustum is not a PerspectiveFrustum");
+    }
+    //  宽高比
+    const aspect = frustum.aspect;
+    frustum.fov = 1.5;
+    //console.log(aspect, fov, near, far);
+
+    updateMiniCamera();
+    viewer.clock.onTick.addEventListener(updateMiniCamera);
+
+    // 显示帧率
+    // 开启帧率显示（默认显示在画布右上角）
+    viewer.scene.debugShowFramesPerSecond = true;
+
+
+  </script>
+</body>
+
+</html>

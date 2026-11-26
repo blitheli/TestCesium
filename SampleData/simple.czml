@@ -377,6 +377,9 @@
       "show":true,
       "verticalOrigin":"CENTER"
     },
+    "model": {
+      "gltf": "/model/satellite.glb"
+    },
     "label":{
       "fillColor":{
         "rgba":[
