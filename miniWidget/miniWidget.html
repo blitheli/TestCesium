@@ -101,28 +101,18 @@
       id: "Satellite/Geoeye1",
       availability: sourceGeoeye1.availability,
       position: sourceGeoeye1.position,
+      path: sourceGeoeye1.path,
       orientation: sourceGeoeye1.orientation,
       model: sourceGeoeye1.model,
+      // track视角时的相机位置偏移
+      viewFrom: new Cesium.Cartesian3(2, 0, 8)
     });
+    // 不要和viewer的相机冲突，单独控制小窗口的相机
     miniViewer.clock.shouldAnimate = false;
 
-    const cameraOffset = new Cesium.Cartesian3(0, 0, 10);
-    const modelMatrix = new Cesium.Matrix4();
-
-    // 更新小窗口的相机视角
-    function updateMiniCamera() {
-      const time = viewer.clock.currentTime;
-      Cesium.JulianDate.clone(time, miniViewer.clock.currentTime);
-
-      // Entity 没有常驻 modelMatrix, 用 computeModelMatrix(time) 取当前姿态.
-      if (!geoeye1.computeModelMatrix(time, modelMatrix)) {
-        return;
-      }
-      miniViewer.camera.lookAtTransform(modelMatrix, cameraOffset);
-      // 更新小窗口的相机视角
-      miniViewer.scene.requestRender();
-    }
-
+    // 设置小窗口的相机跟随实体
+    miniViewer.trackedEntity = geoeye1;
+    
     // 获取小窗口的相机视角
     const frustum = miniViewer.camera.frustum;
     if (!(frustum instanceof Cesium.PerspectiveFrustum)) {
@@ -130,11 +120,18 @@
     }
     //  宽高比
     const aspect = frustum.aspect;
-    frustum.fov = 1.5;
+    frustum.fov = 1.0;
     //console.log(aspect, fov, near, far);
 
-    updateMiniCamera();
-    viewer.clock.onTick.addEventListener(updateMiniCamera);
+
+    // 和 主Viewer 时钟的每一帧同步
+    viewer.clock.onTick.addEventListener((mainClock) => {
+      const subClock = miniViewer.clock;
+      subClock.startTime = mainClock.startTime.clone();
+      subClock.stopTime = mainClock.stopTime.clone();
+      subClock.currentTime = mainClock.currentTime.clone();
+      subClock.multiplier = mainClock.multiplier;
+    });
 
     // 显示帧率
     // 开启帧率显示（默认显示在画布右上角）
